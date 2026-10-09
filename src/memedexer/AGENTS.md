@@ -4,8 +4,8 @@
 > [AGENTS.md](../../AGENTS.md); this file adds package-specific conventions.
 
 ## Layout
-- One subpackage per domain: `storage/` today; `captioning/`, `pipeline/`,
-  `telegram/` as the milestones land. Each subpackage owns a `README.md` describing its contract; read it
+- One subpackage per domain: `storage/` and `captioning/` today;
+  `pipeline/` and `telegram/` as the milestones land. Each subpackage owns a `README.md` describing its contract; read it
   before editing and update it when the contract changes.
 - Keep external boundaries (Telegram client, captioning/OCR backends, database)
   behind small interfaces so the core logic is testable without them.
