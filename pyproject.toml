@@ -15,7 +15,6 @@ build-backend = "uv_build"
 dev = [
     "bandit==1.9.4",
     "coverage==7.16.1",
-    "hypothesis==6.168.1",
     "isort==9.0.1",
     "pre-commit==4.6.2",
     "pytest==9.1.1",

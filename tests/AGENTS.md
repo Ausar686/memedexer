@@ -19,10 +19,3 @@
 - Tests must be order-independent and parallel-safe: use `tmp_path` and
   `monkeypatch`; never hit the real Telegram API, captioning models or network.
 - Name tests for the behavior under test; keep them small and focused.
-
-## pytest vs hypothesis
-- **pytest (example-based)** — the default: known input→output cases,
-  regressions, enumerable edge cases, anything with fakes.
-- **hypothesis (property-based)** — when an invariant must hold across a class
-  of inputs: text normalization, tokenization, serialization round-trips,
-  ranking invariants. Keep strategies constrained and tests pure.

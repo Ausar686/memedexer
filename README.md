@@ -44,7 +44,7 @@ After changing dependencies: `uv lock && uv sync`.
 | --- | --- | --- |
 | `ruff` | Linting | `[tool.ruff]` in `pyproject.toml` |
 | `isort` | Import sorting | `[tool.isort]` |
-| `pytest`, `pytest-asyncio`, `hypothesis` | Tests | `[tool.pytest.ini_options]` |
+| `pytest`, `pytest-asyncio` | Tests | `[tool.pytest.ini_options]` |
 | `coverage` | Test coverage | `[tool.coverage.*]` |
 | `bandit` | Security scanning | `[tool.bandit]` |
 | `semgrep` | Pattern-based scanning | `.semgrep.yml` |
