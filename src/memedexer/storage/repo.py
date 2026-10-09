@@ -54,7 +54,14 @@ async def get_or_create_topic(session: AsyncSession, chat_id: int, thread_id: in
 
 
 async def upsert_media(
-    session: AsyncSession, *, file_unique_id: str, file_id: str, width: int, height: int, file_size: int | None
+    session: AsyncSession,
+    *,
+    file_unique_id: str,
+    file_id: str,
+    mime_type: str,
+    width: int | None,
+    height: int | None,
+    file_size: int | None,
 ) -> Media:
     """`file_id` rotates over time for the same file, so the latest one wins."""
     media = await session.get(Media, file_unique_id)
@@ -62,6 +69,7 @@ async def upsert_media(
         media = Media(file_unique_id=file_unique_id)
         session.add(media)
     media.file_id = file_id
+    media.mime_type = mime_type
     media.width = width
     media.height = height
     media.file_size = file_size
@@ -90,13 +98,20 @@ async def enqueue_job(
     return job
 
 
-async def claim_next_job(session: AsyncSession) -> Job | None:
-    """Atomically move the oldest PENDING job to RUNNING and count the attempt."""
-    oldest = sa.select(Job.id).where(Job.status == JobStatus.PENDING).order_by(Job.id).limit(1).scalar_subquery()
+async def claim_next_job(session: AsyncSession, now: dt.datetime | None = None) -> Job | None:
+    """Atomically move the oldest due PENDING job to RUNNING and count the attempt."""
+    now = now or utcnow()
+    oldest = (
+        sa.select(Job.id)
+        .where(Job.status == JobStatus.PENDING, Job.available_at <= now)
+        .order_by(Job.id)
+        .limit(1)
+        .scalar_subquery()
+    )
     query = (
         sa.update(Job)
         .where(Job.id == oldest, Job.status == JobStatus.PENDING)
-        .values(status=JobStatus.RUNNING, attempts=Job.attempts + 1, updated_at=utcnow())
+        .values(status=JobStatus.RUNNING, attempts=Job.attempts + 1, updated_at=now)
         .returning(Job)
         .execution_options(synchronize_session=False, populate_existing=True)
     )
@@ -109,6 +124,14 @@ async def requeue_interrupted_jobs(session: AsyncSession) -> int:
         sa.update(Job).where(Job.status == JobStatus.RUNNING).values(status=JobStatus.PENDING, updated_at=utcnow())
     )
     return result.rowcount
+
+
+def retry_job(job: Job, *, error: str, delay: dt.timedelta) -> Job:
+    """Put a RUNNING job back in the queue, not to be claimed before `delay` passes."""
+    job.status = JobStatus.PENDING
+    job.error = error
+    job.available_at = utcnow() + delay
+    return job
 
 
 def finish_job(job: Job, status: JobStatus, *, error: str | None = None) -> Job:

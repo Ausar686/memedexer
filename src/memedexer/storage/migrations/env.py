@@ -4,7 +4,7 @@ import sqlalchemy as sa
 from alembic import context
 
 from memedexer.config import DatabaseSettings
-from memedexer.storage.db import create_engine
+from memedexer.storage import db
 from memedexer.storage.models import Base
 
 config = context.config
@@ -22,15 +22,18 @@ def run_migrations_offline() -> None:
 
 
 def do_run_migrations(connection: sa.Connection) -> None:
+    db.suspend_foreign_keys(connection)
     _configure(connection=connection)
     with context.begin_transaction():
         context.run_migrations()
 
 
 async def run_async_migrations() -> None:
-    engine = create_engine(DatabaseSettings().database_url)
+    engine = db.create_engine(DatabaseSettings().database_url)
     async with engine.connect() as connection:
         await connection.run_sync(do_run_migrations)
+        await connection.commit()
+        await connection.run_sync(db.restore_foreign_keys)
     await engine.dispose()
 
 

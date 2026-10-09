@@ -115,8 +115,9 @@ class Media(Base):
 
     file_unique_id: orm.Mapped[str] = orm.mapped_column(sa.String(64), primary_key=True)
     file_id: orm.Mapped[str] = orm.mapped_column(sa.String(256))
-    width: orm.Mapped[int]
-    height: orm.Mapped[int]
+    mime_type: orm.Mapped[str] = orm.mapped_column(sa.String(64))
+    width: orm.Mapped[int | None]
+    height: orm.Mapped[int | None]
     file_size: orm.Mapped[int | None]
     created_at: orm.Mapped[dt.datetime] = orm.mapped_column(default=utcnow)
 
@@ -140,7 +141,7 @@ class Caption(Base):
 class Job(Timestamped, Base):
     __tablename__ = "jobs"
     __table_args__ = (
-        sa.Index("ix_jobs_status_id", "status", "id"),
+        sa.Index("ix_jobs_status_available", "status", "available_at", "id"),
         sa.Index("ix_jobs_chat_message", "chat_id", "message_id"),
         sa.Index("ix_jobs_chat_finished", "chat_id", "finished_at"),
     )
@@ -161,4 +162,5 @@ class Job(Timestamped, Base):
     input_tokens: orm.Mapped[int] = orm.mapped_column(default=0)
     output_tokens: orm.Mapped[int] = orm.mapped_column(default=0)
     cost_microusd: orm.Mapped[int] = orm.mapped_column(sa.BigInteger, default=0)
+    available_at: orm.Mapped[dt.datetime] = orm.mapped_column(default=utcnow)
     finished_at: orm.Mapped[dt.datetime | None]
