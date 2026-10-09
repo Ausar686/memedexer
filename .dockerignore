@@ -1,0 +1,12 @@
+.git
+.venv
+.env
+.local
+.claude
+.agents
+.cursor
+.github
+**/__pycache__
+**/.pytest_cache
+**/.ruff_cache
+tests
