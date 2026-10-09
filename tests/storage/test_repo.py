@@ -185,3 +185,26 @@ async def test_claim_skips_jobs_not_yet_due(session: AsyncSession) -> None:
     assert await repo.claim_next_job(session) is None
     later = await repo.claim_next_job(session, now=job.available_at)
     assert later is not None and later.id == job.id and later.attempts == 2
+
+
+async def test_migrate_chat_moves_topics_and_jobs(session: AsyncSession) -> None:
+    await _chat(session, -1)
+    await _media(session)
+    topic = await repo.get_or_create_topic(session, -1, 3)
+    topic.captioning_enabled = True
+    await _job(session, chat_id=-1)
+    await repo.upsert_chat(session, -100500, title="dup", is_forum=True)
+    await session.commit()
+
+    assert await repo.migrate_chat(session, -1, -100500) is True
+    await session.commit()
+
+    assert await repo.get_chat(session, -1) is None
+    chat = await repo.get_chat(session, -100500)
+    assert (chat.title, chat.added_by_user_id) == ("memes", 7)
+    assert (await repo.get_or_create_topic(session, -100500, 3)).captioning_enabled is True
+    assert (await repo.latest_job_for_message(session, -100500, 1)) is not None
+
+
+async def test_migrate_unknown_chat_is_noop(session: AsyncSession) -> None:
+    assert await repo.migrate_chat(session, -1, -2) is False
