@@ -79,6 +79,8 @@ narration, or dated TODOs. Match the comment density of neighboring code.
     retries, image preparation (`README.md`).
   - [telegram/](src/memedexer/telegram) — aiogram handlers and downloader
     (`README.md`).
+  - [delivery/](src/memedexer/delivery) — caption replies, per-chat
+    throttling, owner alerts (`README.md`).
   - [app.py](src/memedexer/app.py) — wiring and process lifecycle; run with
     `uv run python -m memedexer`.
 - [tests/](tests) — pytest suite. **See [tests/AGENTS.md](tests/AGENTS.md).**
