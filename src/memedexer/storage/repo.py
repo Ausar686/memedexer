@@ -37,6 +37,24 @@ async def upsert_chat(
     return chat
 
 
+async def migrate_chat(session: AsyncSession, old_id: int, new_id: int) -> bool:
+    """Move a group's row to its new supergroup id; topics and jobs follow via ON UPDATE CASCADE.
+
+    A row already created for the new id (the bot may see the supergroup first) is discarded in favor of the old one.
+    """
+    if await session.get(Chat, old_id) is None:
+        return False
+    duplicate = await session.get(Chat, new_id)
+    if duplicate is not None:
+        await session.delete(duplicate)
+        await session.flush()
+    await session.execute(
+        sa.update(Chat).where(Chat.id == old_id).values(id=new_id).execution_options(synchronize_session=False)
+    )
+    session.expunge_all()
+    return True
+
+
 async def list_chats(session: AsyncSession, status: ChatStatus | None = None) -> list[Chat]:
     query = sa.select(Chat).order_by(Chat.created_at)
     if status is not None:

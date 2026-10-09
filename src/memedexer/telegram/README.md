@@ -1,7 +1,8 @@
 # telegram
 
-aiogram 3 integration: handlers that turn group images into jobs, and the
-Bot API downloader the worker uses.
+aiogram 3 integration: chat approval, group commands, handlers that turn
+group images into jobs, and the Bot API downloader the worker uses. Routers
+are built per dispatcher (`build_*_router`) and wired in `app.build_dispatcher`.
 
 ## Ingestion ([handlers.py](handlers.py))
 - Listens to `message` and `edited_message` updates with a photo or document
@@ -21,6 +22,33 @@ Bot API downloader the worker uses.
   else the smallest. Dedup keys on that size's `file_unique_id`.
 - Documents: only `image/jpeg`, `image/png`, `image/webp`, up to the Bot
   API's 20 MB download limit. Their dimensions are unknown until downloaded.
+
+## Chat lifecycle ([membership.py](membership.py))
+| Event | Effect |
+| --- | --- |
+| Bot added (`my_chat_member` not-member → member) | Chat saved as `pending`, owner gets a DM with Approve / Reject. An already `approved` chat stays approved without a new DM. |
+| Owner presses Approve | `approved`; the bot posts a short notice in the chat (how to enable captions, and that images go to a third-party AI provider). |
+| Owner presses Reject / Revoke (from `/chats`) | `rejected` / `revoked`; the bot leaves the chat. |
+| Bot removed from the chat | `approved` or `pending` becomes `revoked`, so re-adding asks the owner again. |
+| Group upgraded to supergroup | The chat row (with topics and jobs) moves to the new id; a row the bot created for the new id is dropped. |
+
+Only `OWNER_USER_ID` can press the buttons or use `/chats`. Telegram doesn't
+let bots DM someone first, so the owner must send `/start` once; startup logs
+a warning if the owner can't be reached ([setup.py](setup.py)).
+
+## Group commands ([admin.py](admin.py))
+| Command | Who | Effect |
+| --- | --- | --- |
+| `/settings` | anyone | Captioning on/off here, effective model and where it's set, description language, spend vs limits, available models |
+| `/captions on\|off` | admins | Toggle captioning for the current topic |
+| `/model [chat] <model>\|reset` | admins | Override the model for the topic (or with `chat`, the whole chat); model ids come from the allowlist and need a configured key |
+| `/language <language>\|reset` | admins | Description language for the whole chat; `reset` means each meme's own language |
+| `/recaption` (as a reply to an image) | admins | Enqueue a `recaption` job, skipping dedup |
+
+"Admins" means the chat's creator or administrators (checked with
+`getChatMember`), anonymous admins posting as the group, and the owner.
+Commands in a chat that isn't approved get a short "waiting for approval"
+reply. Command menus are registered at startup.
 
 ## Bot setup requirements
 - Turn privacy mode off in BotFather (or make the bot an admin). Otherwise

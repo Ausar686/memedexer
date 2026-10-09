@@ -2,6 +2,7 @@
 
 import dataclasses
 import logging
+import typing as t
 
 from memedexer.captioning.catalog import ModelSpec, UnknownModelError, get_model_spec
 from memedexer.config import Provider, Settings
@@ -10,9 +11,13 @@ from memedexer.storage.models import Chat, Topic
 log = logging.getLogger(__name__)
 
 
+ModelSource = t.Literal["topic", "chat", "default"]
+
+
 @dataclasses.dataclass(frozen=True)
 class CaptionSettings:
     model: ModelSpec
+    model_source: ModelSource
     description_language: str | None
 
 
@@ -28,5 +33,11 @@ def _override(level: Chat | Topic | None) -> ModelSpec | None:
 
 
 def resolve_caption_settings(chat: Chat, topic: Topic | None, settings: Settings) -> CaptionSettings:
-    model = _override(topic) or _override(chat) or get_model_spec(settings.default_provider, settings.default_model)
-    return CaptionSettings(model=model, description_language=chat.description_language)
+    source: ModelSource
+    if model := _override(topic):
+        source = "topic"
+    elif model := _override(chat):
+        source = "chat"
+    else:
+        model, source = get_model_spec(settings.default_provider, settings.default_model), "default"
+    return CaptionSettings(model=model, model_source=source, description_language=chat.description_language)

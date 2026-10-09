@@ -12,15 +12,18 @@ from memedexer.captioning.registry import build_providers
 from memedexer.config import Settings
 from memedexer.pipeline.worker import Worker
 from memedexer.storage import db
+from memedexer.telegram.admin import build_admin_router
 from memedexer.telegram.downloader import BotDownloader
 from memedexer.telegram.handlers import build_router
+from memedexer.telegram.membership import build_membership_router
+from memedexer.telegram.setup import prepare_bot
 
 log = logging.getLogger(__name__)
 
 
 def build_dispatcher(**context: object) -> Dispatcher:
     dispatcher = Dispatcher()
-    dispatcher.include_router(build_router())
+    dispatcher.include_routers(build_membership_router(), build_admin_router(), build_router())
     for key, value in context.items():
         dispatcher[key] = value
     return dispatcher
@@ -37,7 +40,8 @@ async def run(settings: Settings) -> None:
         providers=build_providers(settings),
         downloader=BotDownloader(bot),
     )
-    dispatcher = build_dispatcher(sessionmaker=sessionmaker, worker=worker)
+    dispatcher = build_dispatcher(sessionmaker=sessionmaker, worker=worker, settings=settings)
+    await prepare_bot(bot, settings)
 
     worker_task = asyncio.create_task(worker.run(), name="worker")
     stop_tasks: set[asyncio.Task] = set()

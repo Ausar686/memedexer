@@ -38,7 +38,9 @@ update (photo / image document) in an approved chat
 - **Chat approval:** the owner (`OWNER_USER_ID`) gets a DM with Approve/Reject
   when the bot is added to a chat. Unapproved chats are ignored; rejecting
   makes the bot leave. The owner can list and revoke approved chats via DM.
-  The owner must `/start` the bot once so it can DM them.
+  The owner must `/start` the bot once so it can DM them. Removing the bot
+  revokes the chat, so re-adding it asks again; a group upgraded to a
+  supergroup keeps its settings.
 - **Providers:** Anthropic and OpenAI via their official SDKs. A future local
   service plugs in as an OpenAI-compatible endpoint.
 - **Caption schema:** verbatim on-image `text` (original languages and line

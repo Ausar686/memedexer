@@ -26,11 +26,16 @@ cp .env.example .env
 ```
 
 Fill in `.env` (at least `TELEGRAM_BOT_TOKEN`, `OWNER_USER_ID` and a provider
-key), turn the bot's privacy mode off in BotFather, then start it:
+key), turn the bot's privacy mode off in BotFather, send `/start` to the bot
+from the owner's account, then start it:
 
 ```bash
 uv run python -m memedexer
 ```
+
+Add the bot to a group, approve the chat from the owner's DM, then send
+`/captions on` in each topic that should be captioned. The full command list
+is in [src/memedexer/telegram/README.md](src/memedexer/telegram/README.md).
 
 Run any command in the environment with `uv run <cmd>` or after
 `source .venv/bin/activate`.

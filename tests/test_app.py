@@ -10,6 +10,14 @@ from memedexer.config import Settings
 from memedexer.pipeline.worker import Worker
 
 
+@pytest.fixture(autouse=True)
+def no_bot_setup(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def skip(*args: object) -> None:
+        return None
+
+    monkeypatch.setattr(app, "prepare_bot", skip)
+
+
 @pytest.fixture
 def app_settings(settings: Settings, tmp_path: pathlib.Path) -> Settings:
     settings.database_url = f"sqlite+aiosqlite:///{tmp_path / 'app.db'}"

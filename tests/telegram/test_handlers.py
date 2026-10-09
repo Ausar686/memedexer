@@ -1,47 +1,12 @@
-import collections.abc as cabc
-
 import pytest
 import sqlalchemy as sa
 from aiogram import Bot, Dispatcher
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from memedexer.storage import db
 from memedexer.storage.models import NO_TOPIC, ChatStatus, Job, JobTrigger, Media
-from memedexer.telegram.handlers import build_router
 from tests.factories import THREAD_ID, seed_chat
+from tests.telegram.conftest import SpyWorker
 from tests.telegram.updates import PHOTO_SIZES, document, update
-
-
-class SpyWorker:
-    def __init__(self) -> None:
-        self.notified = 0
-
-    def notify(self) -> None:
-        self.notified += 1
-
-
-@pytest.fixture
-def sessionmaker(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
-    return db.create_sessionmaker(engine)
-
-
-@pytest.fixture
-def worker() -> SpyWorker:
-    return SpyWorker()
-
-
-@pytest.fixture
-def dispatcher(sessionmaker: async_sessionmaker[AsyncSession], worker: SpyWorker) -> Dispatcher:
-    dispatcher = Dispatcher(sessionmaker=sessionmaker, worker=worker)
-    dispatcher.include_router(build_router())
-    return dispatcher
-
-
-@pytest.fixture
-async def bot() -> cabc.AsyncIterator[Bot]:
-    bot = Bot("42:TEST")
-    yield bot
-    await bot.session.close()
 
 
 async def jobs(sessionmaker: async_sessionmaker[AsyncSession]) -> list[Job]:
