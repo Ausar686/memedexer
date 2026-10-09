@@ -20,6 +20,11 @@ class IncomingImage:
     width: int | None
     height: int | None
     file_size: int | None
+    is_photo: bool
+
+    @property
+    def photo_file_id(self) -> str | None:
+        return self.file_id if self.is_photo else None
 
 
 def topic_id(message: Message) -> int:
@@ -36,12 +41,14 @@ def extract_image(message: Message) -> IncomingImage | None:
         size = max(fitting, key=lambda p: p.width * p.height) if fitting else min(
             message.photo, key=lambda p: p.width * p.height
         )
-        return IncomingImage(size.file_id, size.file_unique_id, "image/jpeg", size.width, size.height, size.file_size)
+        return IncomingImage(
+            size.file_id, size.file_unique_id, "image/jpeg", size.width, size.height, size.file_size, is_photo=True
+        )
     document = message.document
     if document is None or document.mime_type not in DOCUMENT_MEDIA_TYPES:
         return None
     if document.file_size is not None and document.file_size > MAX_DOWNLOAD_BYTES:
         return None
     return IncomingImage(
-        document.file_id, document.file_unique_id, document.mime_type, None, None, document.file_size
+        document.file_id, document.file_unique_id, document.mime_type, None, None, document.file_size, is_photo=False
     )

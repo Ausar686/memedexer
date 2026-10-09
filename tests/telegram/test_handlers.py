@@ -27,6 +27,7 @@ async def test_photo_in_enabled_topic_is_enqueued(
     async with sessionmaker() as s:
         media = await s.get(Media, "uy")
     assert (media.file_id, media.mime_type, media.width, media.height) == ("y", "image/jpeg", 1280, 960)
+    assert media.photo_file_id == "y"
     assert worker.notified == 1
 
 
