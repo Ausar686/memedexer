@@ -1,0 +1,37 @@
+rules:
+  - id: no-eval
+    languages: [python]
+    severity: ERROR
+    message: >-
+      Avoid eval(): it executes arbitrary code and is a common injection
+      vector. Use ast.literal_eval or explicit parsing instead.
+    patterns:
+      - pattern: eval(...)
+
+  - id: no-exec
+    languages: [python]
+    severity: ERROR
+    message: >-
+      Avoid exec(): it executes arbitrary code. Refactor to call the target
+      logic directly.
+    patterns:
+      - pattern: exec(...)
+
+  - id: subprocess-shell-true
+    languages: [python]
+    severity: ERROR
+    message: >-
+      subprocess called with shell=True can lead to command injection. Pass
+      the command as an argument list and keep shell=False.
+    patterns:
+      - pattern: subprocess.$FUNC(..., shell=True, ...)
+
+  - id: no-yaml-unsafe-load
+    languages: [python]
+    severity: ERROR
+    message: >-
+      yaml.load without a SafeLoader can execute arbitrary objects. Use
+      yaml.safe_load instead.
+    patterns:
+      - pattern: yaml.load(...)
+      - pattern-not: yaml.load(..., Loader=yaml.SafeLoader)
