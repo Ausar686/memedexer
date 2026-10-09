@@ -8,6 +8,8 @@ requires-python = ">=3.13,<3.14"
 dependencies = [
     "aiosqlite==0.22.1",
     "alembic==1.20.0",
+    "anthropic==1.8.0",
+    "openai==3.19.2",
     "pydantic-settings==2.15.0",
     "sqlalchemy[asyncio]==2.1.1",
 ]
