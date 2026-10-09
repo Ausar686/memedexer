@@ -16,6 +16,7 @@ from memedexer.telegram.admin import build_admin_router
 from memedexer.telegram.downloader import BotDownloader
 from memedexer.telegram.handlers import build_router
 from memedexer.telegram.membership import build_membership_router
+from memedexer.telegram.setup import prepare_bot
 
 log = logging.getLogger(__name__)
 
@@ -40,6 +41,7 @@ async def run(settings: Settings) -> None:
         downloader=BotDownloader(bot),
     )
     dispatcher = build_dispatcher(sessionmaker=sessionmaker, worker=worker, settings=settings)
+    await prepare_bot(bot, settings)
 
     worker_task = asyncio.create_task(worker.run(), name="worker")
     stop_tasks: set[asyncio.Task] = set()
