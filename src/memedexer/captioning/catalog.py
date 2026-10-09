@@ -43,6 +43,11 @@ def get_model_spec(provider: Provider, model_id: str) -> ModelSpec:
         raise UnknownModelError(f"{provider!s}/{model_id} is not in the model allowlist") from None
 
 
+def find_model(model_id: str) -> ModelSpec | None:
+    """Model ids are unique across providers, so users can name a model without its provider."""
+    return next((spec for (_, spec_id), spec in MODELS.items() if spec_id == model_id), None)
+
+
 def models_for(provider: Provider) -> list[ModelSpec]:
     return [spec for (spec_provider, _), spec in MODELS.items() if spec_provider == provider]
 

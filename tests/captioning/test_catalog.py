@@ -5,6 +5,7 @@ from memedexer.captioning.catalog import (
     ModelSpec,
     UnknownModelError,
     cost_microusd,
+    find_model,
     get_model_spec,
     models_for,
 )
@@ -34,3 +35,13 @@ def test_every_provider_has_models() -> None:
 def test_settings_default_is_allowlisted() -> None:
     fields = Settings.model_fields
     assert (fields["default_provider"].default, fields["default_model"].default) in MODELS
+
+
+def test_model_ids_are_unique_across_providers() -> None:
+    ids = [model_id for _, model_id in MODELS]
+    assert len(ids) == len(set(ids))
+
+
+def test_find_model() -> None:
+    assert find_model("gpt-6-luna") == get_model_spec(Provider.OPENAI, "gpt-6-luna")
+    assert find_model("gpt-1") is None
