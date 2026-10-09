@@ -12,6 +12,7 @@ from memedexer.captioning.registry import build_providers
 from memedexer.config import Settings
 from memedexer.pipeline.worker import Worker
 from memedexer.storage import db
+from memedexer.telegram.admin import build_admin_router
 from memedexer.telegram.downloader import BotDownloader
 from memedexer.telegram.handlers import build_router
 from memedexer.telegram.membership import build_membership_router
@@ -21,7 +22,7 @@ log = logging.getLogger(__name__)
 
 def build_dispatcher(**context: object) -> Dispatcher:
     dispatcher = Dispatcher()
-    dispatcher.include_routers(build_membership_router(), build_router())
+    dispatcher.include_routers(build_membership_router(), build_admin_router(), build_router())
     for key, value in context.items():
         dispatcher[key] = value
     return dispatcher
