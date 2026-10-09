@@ -60,6 +60,10 @@ update (photo / image document) in an approved chat
   weekly, $200 monthly), in UTC calendar periods (ISO weeks start on Monday).
   Over the limit, jobs are marked `budget_exceeded` and skipped; the owner
   gets one DM per period. Nothing is posted in the chat.
+- **Dedup:** an image already captioned anywhere (same `file_unique_id`) reuses
+  its latest caption for free; `/recaption` forces a new one.
+- **Process health:** if the worker dies, polling stops and the process exits
+  with the error, so the container restart policy brings it back.
 - **Failures:** silent in the chat; refusals and exhausted retries are reported
   to the owner by DM.
 - **Storage:** SQLite (WAL) in a Docker volume via SQLAlchemy async; images are

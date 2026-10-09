@@ -39,6 +39,26 @@ def alembic_config() -> Config:
     return config
 
 
+def suspend_foreign_keys(connection: sa.Connection) -> None:
+    """SQLite batch migrations rebuild tables, which trips enforced foreign keys; checked once afterwards instead.
+
+    SQLite ignores this pragma inside a transaction, so call it before anything else runs on the connection.
+    """
+    if connection.dialect.name == "sqlite":
+        connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
+
+
+def restore_foreign_keys(connection: sa.Connection) -> None:
+    """Re-enable enforcement after the migration committed; fail if it left dangling references."""
+    if connection.dialect.name != "sqlite":
+        return
+    violations = connection.exec_driver_sql("PRAGMA foreign_key_check").fetchall()
+    connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+    connection.commit()
+    if violations:
+        raise RuntimeError(f"migration left foreign key violations: {violations}")
+
+
 async def upgrade(engine: sa_async.AsyncEngine, revision: str = "head") -> None:
     """Migrate the schema on the given engine; safe to call on every startup."""
 
@@ -47,6 +67,8 @@ async def upgrade(engine: sa_async.AsyncEngine, revision: str = "head") -> None:
         config.attributes["connection"] = connection
         command.upgrade(config, revision)
 
-    async with engine.begin() as connection:
+    async with engine.connect() as connection:
         await connection.run_sync(_run)
+        await connection.commit()
+        await connection.run_sync(restore_foreign_keys)
     return None

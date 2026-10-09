@@ -15,7 +15,9 @@ async def _chat(session: AsyncSession, chat_id: int = -100) -> None:
 
 
 async def _media(session: AsyncSession, file_unique_id: str = "u1") -> None:
-    await repo.upsert_media(session, file_unique_id=file_unique_id, file_id="f1", width=10, height=20, file_size=None)
+    await repo.upsert_media(
+        session, file_unique_id=file_unique_id, file_id="f1", mime_type="image/jpeg", width=10, height=20, file_size=0
+    )
 
 
 async def _job(session: AsyncSession, chat_id: int = -100, message_id: int = 1, file_unique_id: str = "u1") -> Job:
@@ -72,7 +74,9 @@ async def test_topic_defaults_to_disabled_and_is_reused(session: AsyncSession) -
 
 async def test_upsert_media_refreshes_file_id(session: AsyncSession) -> None:
     await _media(session)
-    media = await repo.upsert_media(session, file_unique_id="u1", file_id="f2", width=10, height=20, file_size=3)
+    media = await repo.upsert_media(
+        session, file_unique_id="u1", file_id="f2", mime_type="image/png", width=10, height=20, file_size=3
+    )
     assert (media.file_id, media.file_size) == ("f2", 3)
 
 
@@ -167,3 +171,17 @@ async def test_naive_datetimes_are_rejected(session: AsyncSession) -> None:
     session.add(_caption(T0.replace(tzinfo=None), "x"))
     with pytest.raises(sa.exc.StatementError, match="naive datetimes"):
         await session.flush()
+
+
+async def test_claim_skips_jobs_not_yet_due(session: AsyncSession) -> None:
+    await _chat(session)
+    await _media(session)
+    job = await _job(session)
+    claimed = await repo.claim_next_job(session)
+    repo.retry_job(claimed, error="busy", delay=dt.timedelta(minutes=5))
+    await session.flush()
+
+    assert (job.status, job.error) == (JobStatus.PENDING, "busy")
+    assert await repo.claim_next_job(session) is None
+    later = await repo.claim_next_job(session, now=job.available_at)
+    assert later is not None and later.id == job.id and later.attempts == 2
