@@ -37,7 +37,7 @@ async def run(settings: Settings) -> None:
         providers=build_providers(settings),
         downloader=BotDownloader(bot),
     )
-    dispatcher = build_dispatcher(sessionmaker=sessionmaker, worker=worker)
+    dispatcher = build_dispatcher(sessionmaker=sessionmaker, worker=worker, settings=settings)
 
     worker_task = asyncio.create_task(worker.run(), name="worker")
     stop_tasks: set[asyncio.Task] = set()
