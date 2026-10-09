@@ -10,7 +10,7 @@ that text.
 | --- | --- |
 | `src/memedexer/` | Application package |
 | `tests/` | pytest suite |
-| `.docker/`, `compose.yaml`, `.dockerignore` | Container build and local orchestration |
+| `.docker/`, `docker-compose.yaml`, `.dockerignore` | Container build and local orchestration |
 | `.claude/` | Agent settings and skills (`.agents/skills`, `.cursor/skills` link here) |
 | `AGENTS.md` (+ nested) | Agent instructions; each `CLAUDE.md` imports its sibling `AGENTS.md` |
 | `.env.example` | Environment variable template |

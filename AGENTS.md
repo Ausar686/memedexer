@@ -66,7 +66,7 @@ narration, or dated TODOs. Match the comment density of neighboring code.
 ## Architecture map
 - [src/memedexer/](src/memedexer) — the application package.
 - [tests/](tests) — pytest suite. **See [tests/AGENTS.md](tests/AGENTS.md).**
-- [.docker/](.docker) + [compose.yaml](compose.yaml) — container build and
+- [.docker/](.docker) + [docker-compose.yaml](docker-compose.yaml) — container build and
   local orchestration.
 - [.claude/](.claude) — agent tooling: settings and skills. `.agents/skills`
   and `.cursor/skills` are symlinks to `.claude/skills` so Codex and Cursor
