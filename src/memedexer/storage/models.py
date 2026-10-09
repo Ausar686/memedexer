@@ -120,6 +120,8 @@ class Media(Base):
     width: orm.Mapped[int | None]
     height: orm.Mapped[int | None]
     file_size: orm.Mapped[int | None]
+    # A file id `sendPhoto` accepts: the photo itself, or the photo uploaded once for an image document.
+    photo_file_id: orm.Mapped[str | None] = orm.mapped_column(sa.String(256))
     created_at: orm.Mapped[dt.datetime] = orm.mapped_column(default=utcnow)
 
 
@@ -160,6 +162,7 @@ class Job(Timestamped, Base):
     error: orm.Mapped[str | None] = orm.mapped_column(sa.Text)
     caption_id: orm.Mapped[int | None] = orm.mapped_column(sa.ForeignKey("captions.id"))
     reply_message_id: orm.Mapped[int | None]
+    delivery_error: orm.Mapped[str | None] = orm.mapped_column(sa.Text)
     input_tokens: orm.Mapped[int] = orm.mapped_column(default=0)
     output_tokens: orm.Mapped[int] = orm.mapped_column(default=0)
     cost_microusd: orm.Mapped[int] = orm.mapped_column(sa.BigInteger, default=0)

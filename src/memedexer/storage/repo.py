@@ -80,8 +80,9 @@ async def upsert_media(
     width: int | None,
     height: int | None,
     file_size: int | None,
+    photo_file_id: str | None = None,
 ) -> Media:
-    """`file_id` rotates over time for the same file, so the latest one wins."""
+    """`file_id` rotates over time for the same file, so the latest one wins; a known `photo_file_id` is kept."""
     media = await session.get(Media, file_unique_id)
     if media is None:
         media = Media(file_unique_id=file_unique_id)
@@ -91,6 +92,8 @@ async def upsert_media(
     media.width = width
     media.height = height
     media.file_size = file_size
+    if photo_file_id is not None:
+        media.photo_file_id = photo_file_id
     await session.flush()
     return media
 
@@ -169,6 +172,35 @@ async def latest_job_for_message(session: AsyncSession, chat_id: int, message_id
         .limit(1)
     )
     return await session.scalar(query)
+
+
+async def undelivered_jobs(session: AsyncSession, since: dt.datetime) -> list[Job]:
+    """Captioned jobs whose reply was neither posted nor given up on, oldest first."""
+    query = (
+        sa.select(Job)
+        .where(
+            Job.status == JobStatus.DONE,
+            Job.reply_message_id.is_(None),
+            Job.delivery_error.is_(None),
+            Job.finished_at >= since,
+        )
+        .order_by(Job.id)
+    )
+    return list(await session.scalars(query))
+
+
+async def earlier_budget_exceeded(session: AsyncSession, job: Job, since: dt.datetime) -> int:
+    """Over-budget jobs of the same chat in the period with a lower id.
+
+    Comparing ids (not "any other job") makes exactly one job, the first, alert even when several finish at once.
+    """
+    query = sa.select(sa.func.count()).where(
+        Job.chat_id == job.chat_id,
+        Job.status == JobStatus.BUDGET_EXCEEDED,
+        Job.finished_at >= since,
+        Job.id < job.id,
+    )
+    return int(await session.scalar(query))
 
 
 async def spent_microusd(session: AsyncSession, chat_id: int, since: dt.datetime) -> int:

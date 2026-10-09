@@ -208,3 +208,52 @@ async def test_migrate_chat_moves_topics_and_jobs(session: AsyncSession) -> None
 
 async def test_migrate_unknown_chat_is_noop(session: AsyncSession) -> None:
     assert await repo.migrate_chat(session, -1, -2) is False
+
+
+async def test_upsert_media_keeps_known_photo_file_id(session: AsyncSession) -> None:
+    await repo.upsert_media(
+        session, file_unique_id="d", file_id="doc1", mime_type="image/png", width=None, height=None, file_size=1
+    )
+    media = await repo.upsert_media(
+        session,
+        file_unique_id="d",
+        file_id="doc1",
+        mime_type="image/png",
+        width=None,
+        height=None,
+        file_size=1,
+        photo_file_id="uploaded",
+    )
+    assert media.photo_file_id == "uploaded"
+    media = await repo.upsert_media(
+        session, file_unique_id="d", file_id="doc2", mime_type="image/png", width=None, height=None, file_size=1
+    )
+    assert (media.file_id, media.photo_file_id) == ("doc2", "uploaded")
+
+
+async def test_undelivered_jobs(session: AsyncSession) -> None:
+    await _chat(session)
+    await _media(session)
+    jobs = [await _job(session, message_id=i) for i in range(5)]
+    for job in jobs[:4]:
+        repo.finish_job(job, JobStatus.DONE)
+    jobs[1].reply_message_id = 9
+    jobs[2].delivery_error = "message to be replied not found"
+    jobs[3].finished_at = T0 - dt.timedelta(days=2)
+    await session.flush()
+
+    assert [j.id for j in await repo.undelivered_jobs(session, T0)] == [jobs[0].id]
+
+
+async def test_earlier_budget_exceeded(session: AsyncSession) -> None:
+    await _chat(session)
+    await _media(session)
+    old, first, second = [await _job(session, message_id=i) for i in range(3)]
+    for job in (old, first, second):
+        repo.finish_job(job, JobStatus.BUDGET_EXCEEDED)
+    old.finished_at = T0 - dt.timedelta(days=1)
+    await session.flush()
+
+    assert await repo.earlier_budget_exceeded(session, first, T0) == 0
+    assert await repo.earlier_budget_exceeded(session, second, T0) == 1
+    assert await repo.earlier_budget_exceeded(session, second, T0 - dt.timedelta(days=2)) == 2
