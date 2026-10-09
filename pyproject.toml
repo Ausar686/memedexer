@@ -44,6 +44,7 @@ select = ["E", "F", "W", "UP", "B"]
 
 [tool.ruff.lint.per-file-ignores]
 "**/__init__.py" = ["F401"]
+"src/memedexer/storage/migrations/versions/*.py" = ["E501"]
 
 [tool.isort]
 profile = "black"
@@ -66,3 +67,7 @@ exclude_lines = [
 
 [tool.bandit]
 exclude_dirs = ["tests", ".venv"]
+
+[tool.alembic]
+script_location = "%(here)s/src/memedexer/storage/migrations"
+file_template = "%%(rev)s_%%(slug)s"
