@@ -15,7 +15,11 @@ def topic(**overrides: object) -> Topic:
 
 def test_defaults(settings: Settings) -> None:
     resolved = resolve_caption_settings(chat(), None, settings)
-    assert (resolved.model.provider, resolved.model.id) == ("anthropic", "claude-haiku-5-5")
+    assert (resolved.model.provider, resolved.model.id, resolved.model_source) == (
+        "anthropic",
+        "claude-haiku-5-5",
+        "default",
+    )
     assert resolved.description_language is None
 
 
@@ -25,13 +29,13 @@ def test_topic_beats_chat(settings: Settings) -> None:
         topic(provider="openai", model="gpt-6-luna"),
         settings,
     )
-    assert resolved.model.id == "gpt-6-luna"
+    assert (resolved.model.id, resolved.model_source) == ("gpt-6-luna", "topic")
     assert resolved.description_language == "Russian"
 
 
 def test_chat_applies_without_topic_override(settings: Settings) -> None:
     resolved = resolve_caption_settings(chat(provider="anthropic", model="claude-sonnet-5-5"), topic(), settings)
-    assert resolved.model.id == "claude-sonnet-5-5"
+    assert (resolved.model.id, resolved.model_source) == ("claude-sonnet-5-5", "chat")
 
 
 def test_half_set_override_is_ignored(settings: Settings) -> None:
