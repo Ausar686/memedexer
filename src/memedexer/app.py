@@ -14,13 +14,14 @@ from memedexer.pipeline.worker import Worker
 from memedexer.storage import db
 from memedexer.telegram.downloader import BotDownloader
 from memedexer.telegram.handlers import build_router
+from memedexer.telegram.membership import build_membership_router
 
 log = logging.getLogger(__name__)
 
 
 def build_dispatcher(**context: object) -> Dispatcher:
     dispatcher = Dispatcher()
-    dispatcher.include_router(build_router())
+    dispatcher.include_routers(build_membership_router(), build_router())
     for key, value in context.items():
         dispatcher[key] = value
     return dispatcher
