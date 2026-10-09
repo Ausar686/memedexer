@@ -15,6 +15,16 @@ that text.
 | `AGENTS.md` (+ nested) | Agent instructions; each `CLAUDE.md` imports its sibling `AGENTS.md` |
 | `.env.example` | Environment variable template |
 
+## Deployment
+
+```bash
+cp .env.example .env   # bot token, owner id, provider key
+docker compose up -d --build
+```
+
+Bot setup in BotFather, chat approval and operations are covered in
+[docs/deployment.md](docs/deployment.md).
+
 ## Development
 
 The project uses [`uv`](https://docs.astral.sh/uv/) and Python 3.13.

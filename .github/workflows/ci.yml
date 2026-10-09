@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -45,3 +48,23 @@ jobs:
       - run: uv sync --locked
       - run: uv run bandit -c pyproject.toml -r src --severity-level medium
       - run: uv run semgrep scan --config .semgrep.yml --error src
+
+  docker:
+    name: Docker image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: .docker/Dockerfile
+          load: true
+          tags: memedexer:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Migrate a fresh database inside the image
+        run: >-
+          docker run --rm memedexer:ci python -c
+          "import asyncio; from memedexer.storage import db;
+          asyncio.run(db.upgrade(db.create_engine('sqlite+aiosqlite:////data/memedexer.db')))"
