@@ -14,6 +14,9 @@ migrations in [db.py](db.py).
 | `jobs` | id | one row per captioning request: source message, `trigger`, `status`, attempts, error, resulting caption, posted `reply_message_id`, token usage, `cost_microusd`, and `available_at` (when a retried job may be claimed again) |
 
 ## Invariants
+- Chat `status`: `pending` (waiting for the owner), `approved`, `rejected`
+  (owner said no), `revoked` (owner withdrew approval, or the bot was
+  removed). Only `approved` chats are captioned.
 - `thread_id = NO_TOPIC` (0) means "no topic": a chat without topics, or a
   forum's General topic.
 - `None` in an override column means "inherit from the next level".
