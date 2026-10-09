@@ -72,6 +72,9 @@ narration, or dated TODOs. Match the comment density of neighboring code.
     [.env.example](.env.example)).
   - [storage/](src/memedexer/storage) — SQLite schema, query helpers and
     Alembic migrations (`README.md`).
+  - [captioning/](src/memedexer/captioning) — provider adapters, prompt,
+    model allowlist and prices. **See
+    [captioning/AGENTS.md](src/memedexer/captioning/AGENTS.md).**
 - [tests/](tests) — pytest suite. **See [tests/AGENTS.md](tests/AGENTS.md).**
 - [.docker/](.docker) + [docker-compose.yaml](docker-compose.yaml) — container build and
   local orchestration.

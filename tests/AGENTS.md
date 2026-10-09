@@ -10,6 +10,8 @@
   never by manipulating `sys.path`.
 - Run: `coverage run -m pytest` (with coverage) or `pytest -q` (fast). Subset:
   `pytest tests/test_smoke.py -q`.
+- Tests marked `live` (in [live/](live)) call real provider APIs and are
+  deselected by default; run them with `pytest -m live` and keys in `.env`.
 
 ## Writing tests
 - Add or update a test for every behavior change.
