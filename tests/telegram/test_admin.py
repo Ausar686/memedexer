@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from memedexer.config import Settings
 from memedexer.storage import repo
-from memedexer.storage.models import NO_TOPIC, Chat, ChatStatus, Job, JobTrigger, Topic
+from memedexer.storage.models import DESCRIPTION_LANGUAGE_MAX_LENGTH, NO_TOPIC, Chat, ChatStatus, Job, JobTrigger, Topic
 from tests.factories import CHAT_ID, THREAD_ID, seed_chat, seed_job
 from tests.telegram.conftest import SpyWorker
 from tests.telegram.fake_api import FakeTelegram
@@ -212,3 +212,17 @@ async def test_recaption_needs_an_image_reply(
 
     assert worker.notified == 0
     assert telegram.sent_texts(CHAT_ID) == ["Reply to an image with <code>/recaption</code>."] * 2
+
+
+async def test_language_length_matches_column(
+    dispatcher: Dispatcher, bot: Bot, telegram: FakeTelegram, session: AsyncSession, sessionmaker: async_sessionmaker
+) -> None:
+    await seed_chat(session)
+    longest = "L" * DESCRIPTION_LANGUAGE_MAX_LENGTH
+
+    await command(dispatcher, bot, f"/language {longest}x")
+    assert (await load(sessionmaker, Chat, CHAT_ID)).description_language is None
+    await command(dispatcher, bot, f"/language {longest}")
+    assert (await load(sessionmaker, Chat, CHAT_ID)).description_language == longest
+
+    assert Chat.__table__.c.description_language.type.length == DESCRIPTION_LANGUAGE_MAX_LENGTH

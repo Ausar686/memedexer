@@ -8,6 +8,7 @@ import sqlalchemy as sa
 from sqlalchemy import orm
 
 NO_TOPIC = 0
+DESCRIPTION_LANGUAGE_MAX_LENGTH = 32
 
 
 class ChatStatus(enum.StrEnum):
@@ -93,7 +94,7 @@ class Chat(Timestamped, Base):
     is_forum: orm.Mapped[bool] = orm.mapped_column(default=False)
     status: orm.Mapped[ChatStatus] = orm.mapped_column(default=ChatStatus.PENDING)
     added_by_user_id: orm.Mapped[int | None] = orm.mapped_column(sa.BigInteger)
-    description_language: orm.Mapped[str | None] = orm.mapped_column(sa.String(16))
+    description_language: orm.Mapped[str | None] = orm.mapped_column(sa.String(DESCRIPTION_LANGUAGE_MAX_LENGTH))
     provider: orm.Mapped[str | None] = orm.mapped_column(sa.String(32))
     model: orm.Mapped[str | None] = orm.mapped_column(sa.String(128))
 

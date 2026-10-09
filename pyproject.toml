@@ -50,7 +50,7 @@ select = ["E", "F", "W", "UP", "B"]
 
 [tool.ruff.lint.per-file-ignores]
 "**/__init__.py" = ["F401"]
-"src/memedexer/storage/migrations/versions/*.py" = ["E501"]
+"src/memedexer/storage/migrations/versions/*.py" = ["E501", "F401"]
 
 [tool.isort]
 profile = "black"

@@ -14,12 +14,12 @@ from memedexer.config import Settings
 from memedexer.pipeline.budget import limits_microusd, period_starts
 from memedexer.pipeline.resolve import resolve_caption_settings
 from memedexer.storage import repo
-from memedexer.storage.models import Chat, ChatStatus, JobTrigger, Topic, utcnow
+from memedexer.storage.models import DESCRIPTION_LANGUAGE_MAX_LENGTH, Chat, ChatStatus, JobTrigger, Topic, utcnow
 from memedexer.telegram.handlers import Notifier
 from memedexer.telegram.media import extract_image, topic_id
 
 _in_group = F.chat.type.in_({"group", "supergroup"})
-_LANGUAGE = re.compile(r"^[^\W\d_][\w\s()-]{0,31}$")
+_LANGUAGE = re.compile(rf"^[^\W\d_][\w\s()-]{{0,{DESCRIPTION_LANGUAGE_MAX_LENGTH - 1}}}$")
 
 NOT_APPROVED = "This chat is waiting for the bot owner's approval."
 ADMINS_ONLY = "Only chat admins can change this."
