@@ -4,6 +4,7 @@ import pathlib
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
+from memedexer.config import Settings
 from memedexer.storage import db
 
 
@@ -24,3 +25,8 @@ async def engine(database_url: str) -> cabc.AsyncIterator[AsyncEngine]:
 async def session(engine: AsyncEngine) -> cabc.AsyncIterator[AsyncSession]:
     async with db.create_sessionmaker(engine)() as session:
         yield session
+
+
+@pytest.fixture
+def settings() -> Settings:
+    return Settings(_env_file=None, telegram_bot_token="42:TEST", owner_user_id=1, anthropic_api_key="sk-ant")
