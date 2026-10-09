@@ -61,6 +61,8 @@ known_first_party = ["memedexer"]
 [tool.coverage.run]
 branch = true
 source = ["memedexer"]
+concurrency = ["thread", "greenlet"]
+omit = ["*/__main__.py"]
 
 [tool.coverage.report]
 show_missing = true
