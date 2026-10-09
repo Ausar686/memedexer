@@ -25,6 +25,13 @@ uv sync
 cp .env.example .env
 ```
 
+Fill in `.env` (at least `TELEGRAM_BOT_TOKEN`, `OWNER_USER_ID` and a provider
+key), turn the bot's privacy mode off in BotFather, then start it:
+
+```bash
+uv run python -m memedexer
+```
+
 Run any command in the environment with `uv run <cmd>` or after
 `source .venv/bin/activate`.
 

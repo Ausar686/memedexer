@@ -9,9 +9,9 @@ migrations in [db.py](db.py).
 | --- | --- | --- |
 | `chats` | Telegram chat id | title, forum flag, approval `status`, who added the bot, chat-level `provider`/`model`/`description_language` overrides |
 | `topics` | (`chat_id`, `thread_id`) | `captioning_enabled` and topic-level `provider`/`model` overrides |
-| `media` | `file_unique_id` | latest `file_id` and dimensions; images themselves are never stored |
+| `media` | `file_unique_id` | latest `file_id`, `mime_type` and dimensions (unknown for documents); images themselves are never stored |
 | `captions` | id | one row per captioning run: provider, model, `text`, `description`, `tags`, `languages`, `kind` |
-| `jobs` | id | one row per captioning request: source message, `trigger`, `status`, attempts, error, resulting caption, posted `reply_message_id`, token usage and `cost_microusd` |
+| `jobs` | id | one row per captioning request: source message, `trigger`, `status`, attempts, error, resulting caption, posted `reply_message_id`, token usage, `cost_microusd`, and `available_at` (when a retried job may be claimed again) |
 
 ## Invariants
 - `thread_id = NO_TOPIC` (0) means "no topic": a chat without topics, or a
@@ -38,5 +38,12 @@ uv run alembic revision --autogenerate --rev-id <NNNN> -m "<change>"
 ```
 
 The CLI reads `DATABASE_URL` from the environment or `.env`.
+
+SQLite can't alter columns in place, so autogenerate emits batch operations
+that rebuild tables. Foreign-key enforcement is suspended while migrations
+run and restored afterwards, failing if any reference dangles
+(`db.suspend_foreign_keys` / `db.restore_foreign_keys`). When a migration adds
+a non-null column, add it as nullable, backfill it, then tighten it, since
+existing rows have no value (see `0002`).
 `tests/storage/test_migrations.py` fails if the models and migrations drift
 apart.

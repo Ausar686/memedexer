@@ -75,6 +75,12 @@ narration, or dated TODOs. Match the comment density of neighboring code.
   - [captioning/](src/memedexer/captioning) — provider adapters, prompt,
     model allowlist and prices. **See
     [captioning/AGENTS.md](src/memedexer/captioning/AGENTS.md).**
+  - [pipeline/](src/memedexer/pipeline) — job worker: dedup, budgets,
+    retries, image preparation (`README.md`).
+  - [telegram/](src/memedexer/telegram) — aiogram handlers and downloader
+    (`README.md`).
+  - [app.py](src/memedexer/app.py) — wiring and process lifecycle; run with
+    `uv run python -m memedexer`.
 - [tests/](tests) — pytest suite. **See [tests/AGENTS.md](tests/AGENTS.md).**
 - [.docker/](.docker) + [docker-compose.yaml](docker-compose.yaml) — container build and
   local orchestration.
