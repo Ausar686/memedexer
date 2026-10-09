@@ -10,6 +10,7 @@ from aiogram.enums import ParseMode
 
 from memedexer.captioning.registry import build_providers
 from memedexer.config import Settings
+from memedexer.delivery.service import Delivery
 from memedexer.pipeline.worker import Worker
 from memedexer.storage import db
 from memedexer.telegram.admin import build_admin_router
@@ -34,14 +35,18 @@ async def run(settings: Settings) -> None:
     await db.upgrade(engine)
     sessionmaker = db.create_sessionmaker(engine)
     bot = Bot(settings.telegram_bot_token.get_secret_value(), default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    downloader = BotDownloader(bot)
+    delivery = Delivery(bot=bot, sessionmaker=sessionmaker, settings=settings, downloader=downloader)
     worker = Worker(
         sessionmaker=sessionmaker,
         settings=settings,
         providers=build_providers(settings),
-        downloader=BotDownloader(bot),
+        downloader=downloader,
+        listener=delivery,
     )
     dispatcher = build_dispatcher(sessionmaker=sessionmaker, worker=worker, settings=settings)
     await prepare_bot(bot, settings)
+    await delivery.start()
 
     worker_task = asyncio.create_task(worker.run(), name="worker")
     stop_tasks: set[asyncio.Task] = set()
@@ -62,6 +67,7 @@ async def run(settings: Settings) -> None:
         worker_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await worker_task
+        await delivery.close()
         await engine.dispose()
     return None
 
