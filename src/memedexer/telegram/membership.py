@@ -45,7 +45,7 @@ def build_membership_router() -> Router:
     return router
 
 
-def _describe(chat: Chat) -> str:
+def describe_chat(chat: Chat) -> str:
     title = html.escape(chat.title or "untitled")
     return f"<b>{title}</b> (<code>{chat.id}</code>, {'forum' if chat.is_forum else 'group'})"
 
@@ -88,7 +88,7 @@ async def bot_joined(
     await notify_owner(
         bot,
         settings,
-        f"The bot was added to {_describe(chat)} by {adder} (<code>{event.from_user.id}</code>).",
+        f"The bot was added to {describe_chat(chat)} by {adder} (<code>{event.from_user.id}</code>).",
         _approval_keyboard(chat.id),
     )
 
@@ -138,7 +138,7 @@ async def list_chats(message: Message, sessionmaker: async_sessionmaker[AsyncSes
     keyboard = InlineKeyboardBuilder()
     lines = []
     for chat in chats:
-        lines.append(f"{'✅' if chat.status is ChatStatus.APPROVED else '⏳'} {_describe(chat)}")
+        lines.append(f"{'✅' if chat.status is ChatStatus.APPROVED else '⏳'} {describe_chat(chat)}")
         title = (chat.title or str(chat.id))[:24]
         if chat.status is ChatStatus.APPROVED:
             keyboard.button(text=f"Revoke {title}", callback_data=ChatAction(action="revoke", chat_id=chat.id))
@@ -183,7 +183,7 @@ async def on_chat_action(
     outcome = {ChatStatus.APPROVED: "approved", ChatStatus.REJECTED: "rejected", ChatStatus.REVOKED: "revoked"}
     await query.answer(f"Chat {outcome[chat.status]}.")
     if isinstance(query.message, Message):
-        await _send_quietly(query.message.edit_text(f"{_describe(chat)}: {outcome[chat.status]}."))
+        await _send_quietly(query.message.edit_text(f"{describe_chat(chat)}: {outcome[chat.status]}."))
 
 
 async def _send_quietly(call: object) -> None:

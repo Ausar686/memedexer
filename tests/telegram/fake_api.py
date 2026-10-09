@@ -4,7 +4,7 @@ import typing as t
 
 from aiogram import Bot
 from aiogram.client.session.base import BaseSession
-from aiogram.methods import GetChat, GetChatMember, GetMe, SendMessage, TelegramMethod
+from aiogram.methods import GetChat, GetChatMember, GetMe, SendMessage, SendPhoto, TelegramMethod
 from aiogram.types import ChatFullInfo, ChatMemberMember, ChatMemberOwner, Message, User
 
 
@@ -15,7 +15,8 @@ class FakeTelegram(BaseSession):
         super().__init__()
         self.requests: list[TelegramMethod] = []
         self.admins: set[int] = set()
-        self.errors: dict[type[TelegramMethod], Exception] = {}
+        # A list of errors is consumed one per call, so a call can fail N times and then succeed.
+        self.errors: dict[type[TelegramMethod], Exception | list[Exception]] = {}
         self._message_ids = itertools.count(1000)
 
     def calls(self, method: type[TelegramMethod]) -> list[t.Any]:
@@ -26,8 +27,11 @@ class FakeTelegram(BaseSession):
 
     async def make_request(self, bot: Bot, method: TelegramMethod, timeout: int | None = None) -> t.Any:
         self.requests.append(method)
-        if type(method) in self.errors:
-            raise self.errors[type(method)]
+        error = self.errors.get(type(method))
+        if isinstance(error, list):
+            error = error.pop(0) if error else None
+        if error is not None:
+            raise error
         if isinstance(method, SendMessage):
             return Message.model_validate(
                 {
@@ -35,6 +39,20 @@ class FakeTelegram(BaseSession):
                     "date": 0,
                     "chat": {"id": method.chat_id, "type": "private" if method.chat_id > 0 else "supergroup"},
                     "text": method.text,
+                }
+            )
+        if isinstance(method, SendPhoto):
+            message_id = next(self._message_ids)
+            return Message.model_validate(
+                {
+                    "message_id": message_id,
+                    "date": 0,
+                    "chat": {"id": method.chat_id, "type": "supergroup"},
+                    "caption": method.caption,
+                    "photo": [
+                        {"file_id": f"small-{message_id}", "file_unique_id": "s", "width": 90, "height": 90},
+                        {"file_id": f"photo-{message_id}", "file_unique_id": "p", "width": 1280, "height": 960},
+                    ],
                 }
             )
         if isinstance(method, GetChatMember):

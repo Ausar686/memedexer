@@ -9,9 +9,9 @@ migrations in [db.py](db.py).
 | --- | --- | --- |
 | `chats` | Telegram chat id | title, forum flag, approval `status`, who added the bot, chat-level `provider`/`model`/`description_language` overrides |
 | `topics` | (`chat_id`, `thread_id`) | `captioning_enabled` and topic-level `provider`/`model` overrides |
-| `media` | `file_unique_id` | latest `file_id`, `mime_type` and dimensions (unknown for documents); images themselves are never stored |
+| `media` | `file_unique_id` | latest `file_id`, `mime_type`, dimensions (unknown for documents), and `photo_file_id` (sendable as a photo; set for photos at ingestion and for documents after their first reply); images themselves are never stored |
 | `captions` | id | one row per captioning run: provider, model, `text`, `description`, `tags`, `languages`, `kind` |
-| `jobs` | id | one row per captioning request: source message, `trigger`, `status`, attempts, error, resulting caption, posted `reply_message_id`, token usage, `cost_microusd`, and `available_at` (when a retried job may be claimed again) |
+| `jobs` | id | one row per captioning request: source message, `trigger`, `status`, attempts, error, resulting caption, posted `reply_message_id` or `delivery_error`, token usage, `cost_microusd`, and `available_at` (when a retried job may be claimed again) |
 
 ## Invariants
 - Chat `status`: `pending` (waiting for the owner), `approved`, `rejected`

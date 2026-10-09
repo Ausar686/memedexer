@@ -40,5 +40,5 @@ idle loops wake immediately instead of waiting for the 5 s poll.
 
 ## Extension point
 `JobListener.job_finished(job)` runs after every terminal job (not after a
-retry). It's a no-op for now; caption delivery and owner alerts will plug in
-here. A failing listener is logged and never affects the job.
+retry). The app plugs in `delivery.Delivery`, which posts replies and alerts
+the owner. A failing listener is logged and never affects the job.

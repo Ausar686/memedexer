@@ -213,6 +213,7 @@ async def recaption(
             width=image.width,
             height=image.height,
             file_size=image.file_size,
+            photo_file_id=image.photo_file_id,
         )
         await repo.enqueue_job(
             session,

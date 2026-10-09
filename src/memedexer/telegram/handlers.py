@@ -64,6 +64,7 @@ async def ingest(
             width=image.width,
             height=image.height,
             file_size=image.file_size,
+            photo_file_id=image.photo_file_id,
         )
         job = await repo.enqueue_job(
             session,

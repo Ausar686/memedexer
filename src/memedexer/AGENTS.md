@@ -5,7 +5,7 @@
 
 ## Layout
 - One subpackage per domain: `storage/`, `captioning/`, `pipeline/`,
-  `telegram/`; `app.py` only wires them together. Each subpackage owns a `README.md` describing its contract; read it
+  `telegram/`, `delivery/`; `app.py` only wires them together. Each subpackage owns a `README.md` describing its contract; read it
   before editing and update it when the contract changes.
 - Keep external boundaries (Telegram client, captioning/OCR backends, database)
   behind small interfaces so the core logic is testable without them.

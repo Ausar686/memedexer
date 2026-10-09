@@ -6,7 +6,9 @@ from tests.telegram.updates import PHOTO_SIZES, document, message
 
 
 def test_photo_picks_largest_size_within_limit() -> None:
-    assert extract_image(message(photo=PHOTO_SIZES)) == IncomingImage("y", "uy", "image/jpeg", 1280, 960, 120_000)
+    image = extract_image(message(photo=PHOTO_SIZES))
+    assert image == IncomingImage("y", "uy", "image/jpeg", 1280, 960, 120_000, is_photo=True)
+    assert image.photo_file_id == "y"
 
 
 def test_photo_falls_back_to_smallest_when_all_too_big() -> None:
@@ -18,6 +20,7 @@ def test_photo_falls_back_to_smallest_when_all_too_big() -> None:
 def test_image_documents_are_accepted(mime_type: str) -> None:
     image = extract_image(message(document=document(mime_type)))
     assert (image.file_unique_id, image.mime_type, image.width) == ("doc", mime_type, None)
+    assert image.photo_file_id is None
 
 
 @pytest.mark.parametrize("mime_type", ["image/gif", "image/heic", "application/pdf", "video/mp4"])
