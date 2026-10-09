@@ -7,7 +7,9 @@ indexes them so a meme can later be found by searching for that text.
 ## Project overview
 - Package: [src/memedexer/](src/memedexer). **See [src/memedexer/AGENTS.md](src/memedexer/AGENTS.md).**
 - Runtime: Python 3.13 (`requires-python` in [pyproject.toml](pyproject.toml)).
-- Status: scaffolding only — no runtime code yet.
+- Product decisions (flow, topics, approval, budgets, reply format): **see
+  [docs/architecture.md](docs/architecture.md)** — read it before changing
+  behavior and update it when a decision changes.
 
 ## Environment & setup
 - Dependency manager: `uv`; lock file `uv.lock`. The project is a src-layout
@@ -65,6 +67,11 @@ narration, or dated TODOs. Match the comment density of neighboring code.
 
 ## Architecture map
 - [src/memedexer/](src/memedexer) — the application package.
+  - [config.py](src/memedexer/config.py) — `Settings` from env/`.env`; the
+    single source of env variable names and defaults (template:
+    [.env.example](.env.example)).
+  - [storage/](src/memedexer/storage) — SQLite schema, query helpers and
+    Alembic migrations (`README.md`).
 - [tests/](tests) — pytest suite. **See [tests/AGENTS.md](tests/AGENTS.md).**
 - [.docker/](.docker) + [docker-compose.yaml](docker-compose.yaml) — container build and
   local orchestration.

@@ -221,3 +221,4 @@ __marimo__/
 
 .local/
 .claude/settings.local.json
+/data/
