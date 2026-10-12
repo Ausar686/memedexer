@@ -314,8 +314,39 @@ async def test_run_requeues_interrupted_jobs(
         if (await load_job(sessionmaker, job.id)).status is JobStatus.DONE:
             break
         await asyncio.sleep(0.01)
-    task.cancel()
+    worker.stop()
+    await asyncio.wait_for(task, 5)
     assert (await load_job(sessionmaker, job.id)).status is JobStatus.DONE
+
+
+async def test_stop_lets_the_current_job_finish(
+    session: AsyncSession, sessionmaker: async_sessionmaker[AsyncSession], settings: Settings
+) -> None:
+    class BlockingProvider(FakeProvider):
+        def __init__(self) -> None:
+            super().__init__(caption_result())
+            self.started, self.release = asyncio.Event(), asyncio.Event()
+
+        async def caption(self, *args: object, **kwargs: object) -> object:
+            self.started.set()
+            await self.release.wait()
+            return await super().caption(*args, **kwargs)
+
+    await seed_chat(session)
+    first = await seed_job(session, message_id=1)
+    second = await seed_job(session, message_id=2, file_unique_id="other")
+    settings.worker_concurrency = 1
+    provider = BlockingProvider()
+    worker = make_worker(sessionmaker, settings, provider)
+    task = asyncio.create_task(worker.run())
+    await asyncio.wait_for(provider.started.wait(), 5)
+
+    worker.stop()
+    provider.release.set()
+    await asyncio.wait_for(task, 5)
+
+    assert (await load_job(sessionmaker, first.id)).status is JobStatus.DONE
+    assert (await load_job(sessionmaker, second.id)).status is JobStatus.PENDING
 
 
 def test_retry_delay_grows_and_caps() -> None:

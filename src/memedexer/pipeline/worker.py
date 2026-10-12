@@ -74,9 +74,19 @@ class Worker:
         self._downloader = downloader
         self._listener = listener or NullListener()
         self._wake = asyncio.Event()
+        self._stopping = asyncio.Event()
 
     def notify(self) -> None:
         """Wake idle loops after a job is enqueued instead of waiting for the next poll."""
+        self._wake.set()
+
+    def stop(self) -> None:
+        """Ask every loop to finish its current job and exit, so `run()` returns without interrupting a query.
+
+        Cancelling mid-query instead aborts SQLAlchemy's connection reset and can leave a connection close that
+        never completes, hanging the event loop's shutdown.
+        """
+        self._stopping.set()
         self._wake.set()
 
     async def run(self) -> None:
@@ -88,7 +98,7 @@ class Worker:
         await asyncio.gather(*(self._loop() for _ in range(self._settings.worker_concurrency)))
 
     async def _loop(self) -> None:
-        while True:
+        while not self._stopping.is_set():
             if await self.run_once():
                 continue
             try:
