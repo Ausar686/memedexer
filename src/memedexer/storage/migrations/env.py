@@ -16,7 +16,8 @@ def _configure(**kwargs: object) -> None:
 
 
 def run_migrations_offline() -> None:
-    _configure(url=DatabaseSettings().database_url, literal_binds=True, dialect_opts={"paramstyle": "named"})
+    url = DatabaseSettings().database_url.get_secret_value()
+    _configure(url=url, literal_binds=True, dialect_opts={"paramstyle": "named"})
     with context.begin_transaction():
         context.run_migrations()
 
@@ -29,7 +30,7 @@ def do_run_migrations(connection: sa.Connection) -> None:
 
 
 async def run_async_migrations() -> None:
-    engine = db.create_engine(DatabaseSettings().database_url)
+    engine = db.create_engine(DatabaseSettings().database_url.get_secret_value())
     async with engine.connect() as connection:
         await connection.run_sync(do_run_migrations)
         await connection.commit()

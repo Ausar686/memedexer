@@ -1,6 +1,7 @@
 import asyncio
 import pathlib
 
+import pydantic
 import pytest
 import sqlalchemy as sa
 from aiogram import Dispatcher
@@ -20,7 +21,7 @@ def no_bot_setup(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture
 def app_settings(settings: Settings, tmp_path: pathlib.Path) -> Settings:
-    settings.database_url = f"sqlite+aiosqlite:///{tmp_path / 'app.db'}"
+    settings.database_url = pydantic.SecretStr(f"sqlite+aiosqlite:///{tmp_path / 'app.db'}")
     return settings
 
 
@@ -42,7 +43,7 @@ async def test_run_migrates_and_shuts_down_cleanly(app_settings: Settings, monke
     await asyncio.wait_for(app.run(app_settings), timeout=5)
 
     assert {"message", "edited_message"} <= set(polling_kwargs["allowed_updates"])
-    engine = sa.create_engine(app_settings.database_url.replace("+aiosqlite", ""))
+    engine = sa.create_engine(app_settings.database_url.get_secret_value().replace("+aiosqlite", ""))
     with engine.connect() as connection:
         assert "jobs" in sa.inspect(connection).get_table_names()
     engine.dispose()
