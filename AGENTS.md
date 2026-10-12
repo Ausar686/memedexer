@@ -84,8 +84,11 @@ narration, or dated TODOs. Match the comment density of neighboring code.
   - [app.py](src/memedexer/app.py) — wiring and process lifecycle; run with
     `uv run python -m memedexer`.
 - [tests/](tests) — pytest suite. **See [tests/AGENTS.md](tests/AGENTS.md).**
-- [.docker/](.docker) + [docker-compose.yaml](docker-compose.yaml) — container build and
-  local orchestration.
+- [.docker/](.docker) + [docker-compose.yaml](docker-compose.yaml) — image
+  (uv two-stage build on Alpine, no pip, non-root, `/data` volume) and the
+  compose service. CI fails on fixable high/critical image CVEs (Trivy).
+  Running it: [docs/deployment.md](docs/deployment.md). `.dockerignore` is an
+  allowlist, so new top-level files the build needs must be added there.
 - [.claude/](.claude) — agent tooling: settings and skills. `.agents/skills`
   and `.cursor/skills` are symlinks to `.claude/skills` so Codex and Cursor
   share the same skills.
