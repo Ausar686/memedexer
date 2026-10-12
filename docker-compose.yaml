@@ -4,6 +4,9 @@ services:
       context: .
       dockerfile: .docker/Dockerfile
     image: memedexer:latest
+    # The bot only makes outbound calls, and on hosts whose VPN or firewall doesn't pass bridged container traffic it
+    # can reach Telegram only the way the host does.
+    network_mode: host
     env_file: .env
     environment:
       # The database must live on the volume, whatever .env says.
