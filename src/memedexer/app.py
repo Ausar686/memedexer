@@ -21,6 +21,10 @@ from memedexer.telegram.setup import prepare_bot
 
 log = logging.getLogger(__name__)
 
+# Together they stay within compose's 30 s stop_grace_period, after which Docker kills the process.
+WORKER_STOP_TIMEOUT_SECONDS = 15.0
+DELIVERY_CLOSE_TIMEOUT_SECONDS = 10.0
+
 
 def build_dispatcher(**context: object) -> Dispatcher:
     dispatcher = Dispatcher()
@@ -50,10 +54,11 @@ async def run(settings: Settings) -> None:
 
     worker_task = asyncio.create_task(worker.run(), name="worker")
     stop_tasks: set[asyncio.Task] = set()
+    shutting_down = False
 
     def on_worker_exit(task: asyncio.Task) -> None:
         # A dead worker would leave the bot accepting jobs nobody processes; stop polling so `run` re-raises and exits.
-        if task.cancelled():
+        if shutting_down or task.cancelled():
             return
         log.error("worker stopped; shutting down")
         stop = asyncio.create_task(dispatcher.stop_polling())
@@ -64,11 +69,24 @@ async def run(settings: Settings) -> None:
     try:
         await dispatcher.start_polling(bot, allowed_updates=dispatcher.resolve_used_update_types())
     finally:
-        worker_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await worker_task
-        await delivery.close()
-        await engine.dispose()
+        shutting_down = True
+        worker.stop()
+        try:
+            await finish(worker_task, WORKER_STOP_TIMEOUT_SECONDS)
+        finally:
+            await delivery.close(DELIVERY_CLOSE_TIMEOUT_SECONDS)
+            await engine.dispose()
+    return None
+
+
+async def finish(task: asyncio.Task, timeout: float) -> None:
+    """Wait for a task that was asked to stop, cancelling it only if it overruns; re-raises its own failure."""
+    await asyncio.wait({task}, timeout=timeout)
+    if not task.done():
+        log.warning("%s didn't stop within %.0f s; cancelling it", task.get_name(), timeout)
+        task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
     return None
 
 

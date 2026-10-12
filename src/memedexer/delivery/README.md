@@ -27,6 +27,8 @@ helpers.
 - A job counts as delivered once `reply_message_id` is set, and as abandoned once
   `delivery_error` is. `start()` re-queues jobs with neither that finished in
   the last 24 h, so a restart doesn't lose replies.
+- `close(timeout)` lets queued replies finish before stopping the idle queue
+  tasks; replies still pending at the deadline are retried by `start()`.
 - `RetryAfter` waits the time Telegram asks for. Network/server errors and
   retryable download errors back off (5 s × attempt, up to
   `MAX_SEND_ATTEMPTS`), then give up and alert the owner.

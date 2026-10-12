@@ -66,6 +66,10 @@ update (photo / image document) in an approved chat
   its latest caption for free; `/recaption` forces a new one.
 - **Process health:** if the worker dies, polling stops and the process exits
   with the error, so the container restart policy brings it back.
+- **Shutdown:** on stop, polling ends, the worker finishes its current job
+  (up to 15 s), queued replies are posted (up to 10 s), then the database
+  closes; together this fits compose's 30 s stop grace period. Anything cut
+  off is resumed on the next start.
 - **Failures:** silent in the chat; refusals, exhausted retries and replies
   that couldn't be posted are reported to the owner by DM (identical alerts at
   most hourly). Replies interrupted by a restart are retried if they finished

@@ -31,6 +31,13 @@ For each claimed job the worker, in order:
 - An unexpected exception fails the job instead of killing the worker.
 - `run()` puts jobs left `running` by a crash back to `pending` at startup.
 
+## Stopping
+`stop()` lets each loop finish its current job and exit; `run()` then
+returns. Don't cancel the worker to stop it: a cancellation that lands
+mid-query aborts SQLAlchemy's connection reset and can leave an aiosqlite
+close that never completes, hanging the event loop's shutdown. The app only
+cancels a worker that overruns its stop deadline.
+
 ## Concurrency
 `WORKER_CONCURRENCY` loops share the queue; claiming is a single atomic
 `UPDATE … RETURNING`. The budget check happens before the call, so a chat can
