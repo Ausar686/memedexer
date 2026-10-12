@@ -62,20 +62,24 @@ The owner manages chats with `/chats` in the bot's DM.
   DM when a chat reaches one, and `/settings` shows current spend.
 
 ## Troubleshooting
+- **Telegram calls fail with `Request timeout error`** while `curl` on the host
+  reaches `api.telegram.org`: the host's VPN or firewall doesn't pass bridged
+  container traffic. The service already uses the host's network
+  (`network_mode: host`) for this reason, so check that the compose file still
+  has it.
 - **Build fails with `DNS: transient error` / `Not continuing due to
   stale/unavailable repositories`** while pulling the base images works: the
-  build steps can't resolve names. Build containers don't get Docker's
-  embedded DNS. They get the host's nameservers minus loopback ones, so a host
-  that resolves only through a local stub (systemd-resolved, dnsmasq, a VPN
-  client) leaves them with Docker's fallback, Google DNS, which some networks
-  block. The running service isn't affected, because compose networks use the
-  embedded DNS. Build on the host network, then start without `--build`:
+  build steps can't reach the network. Build steps always run on Docker's
+  bridge, so the cause above applies to them too. So does a host that resolves
+  only through a local stub (systemd-resolved, dnsmasq, a VPN client): build
+  steps then get Docker's fallback, Google DNS, which some networks block.
+  Build on the host network, then start without `--build`:
   ```bash
   docker build --network host -f .docker/Dockerfile -t memedexer:latest .
   docker compose up -d
   ```
-  Compose's own build can't do this: `network: host` in the compose file needs
-  a `network.host` entitlement that `docker compose build` has no way to
-  grant. For a permanent fix, point Docker at a resolver the containers can
-  reach, e.g. `"dns": ["<your router or upstream DNS>"]` in
-  `/etc/docker/daemon.json`, then restart Docker.
+  Compose's own build can't do this: `network: host` under `build:` needs a
+  `network.host` entitlement that `docker compose build` has no way to grant.
+  If only DNS fails, a permanent fix is a resolver the containers can reach,
+  e.g. `"dns": ["<your router or upstream DNS>"]` in `/etc/docker/daemon.json`,
+  then restart Docker.
