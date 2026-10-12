@@ -1,3 +1,4 @@
+import asyncio
 import datetime as dt
 import decimal
 
@@ -356,3 +357,38 @@ async def test_worker_and_delivery_end_to_end(
     assert "WHEN ALL TESTS PASS" in sent.caption
     stored = await load_job(sessionmaker, job.id)
     assert (stored.status, stored.reply_message_id) == (JobStatus.DONE, 1000)
+
+
+async def test_close_delivers_queued_replies_first(
+    delivery: Delivery, telegram: FakeTelegram, session: AsyncSession
+) -> None:
+    await seed_chat(session)
+    job = await captioned_job(session)
+
+    await delivery.job_finished(job)
+    await delivery.close()
+
+    assert [sent.reply_parameters.message_id for sent in telegram.calls(SendPhoto)] == [job.message_id]
+
+
+async def test_close_abandons_replies_after_timeout(
+    delivery: Delivery,
+    session: AsyncSession,
+    sessionmaker: async_sessionmaker,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    await seed_chat(session)
+    job = await captioned_job(session)
+
+    async def stuck_deliver(job_id: int) -> None:
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(delivery, "deliver", stuck_deliver)
+    await delivery.job_finished(job)
+
+    await asyncio.wait_for(delivery.close(timeout=0.05), 5)
+
+    assert "abandoning unfinished replies" in caplog.text
+    stored = await load_job(sessionmaker, job.id)
+    assert (stored.reply_message_id, stored.delivery_error) == (None, None)

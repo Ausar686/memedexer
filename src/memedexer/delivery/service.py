@@ -32,6 +32,7 @@ MAX_SEND_ATTEMPTS = 4
 SEND_RETRY_SECONDS = 5.0
 ALERT_COOLDOWN = dt.timedelta(hours=1)
 ALERT_ERROR_CHARS = 500
+CLOSE_TIMEOUT_SECONDS = 10.0
 
 
 class DeliveryFailed(Exception):
@@ -75,7 +76,15 @@ class Delivery:
             self._enqueue(job.chat_id, job.id)
         return None
 
-    async def close(self) -> None:
+    async def close(self, timeout: float = CLOSE_TIMEOUT_SECONDS) -> None:
+        """Let queued replies finish, then stop the idle queue tasks.
+
+        Replies still pending after `timeout` are cancelled and retried by `start()` on the next run.
+        """
+        try:
+            await asyncio.wait_for(self.join(), timeout)
+        except TimeoutError:
+            log.warning("abandoning unfinished replies after %.0f s; they'll be retried on the next start", timeout)
         for task in self._tasks.values():
             task.cancel()
         for task in self._tasks.values():
