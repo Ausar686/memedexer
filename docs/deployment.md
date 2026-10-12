@@ -60,3 +60,22 @@ The owner manages chats with `/chats` in the bot's DM.
   ```
 - **Costs:** per-chat limits come from `COST_LIMIT_*_USD`; the owner gets a
   DM when a chat reaches one, and `/settings` shows current spend.
+
+## Troubleshooting
+- **Build fails with `DNS: transient error` / `Not continuing due to
+  stale/unavailable repositories`** while pulling the base images works: the
+  build steps can't resolve names. Build containers don't get Docker's
+  embedded DNS. They get the host's nameservers minus loopback ones, so a host
+  that resolves only through a local stub (systemd-resolved, dnsmasq, a VPN
+  client) leaves them with Docker's fallback, Google DNS, which some networks
+  block. The running service isn't affected, because compose networks use the
+  embedded DNS. Build on the host network, then start without `--build`:
+  ```bash
+  docker build --network host -f .docker/Dockerfile -t memedexer:latest .
+  docker compose up -d
+  ```
+  Compose's own build can't do this: `network: host` in the compose file needs
+  a `network.host` entitlement that `docker compose build` has no way to
+  grant. For a permanent fix, point Docker at a resolver the containers can
+  reach, e.g. `"dns": ["<your router or upstream DNS>"]` in
+  `/etc/docker/daemon.json`, then restart Docker.
