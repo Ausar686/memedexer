@@ -24,7 +24,7 @@ def test_defaults(env: pytest.MonkeyPatch) -> None:
     assert settings.owner_user_id == 42
     assert settings.default_provider is Provider.ANTHROPIC
     assert settings.default_model == "claude-haiku-5-5"
-    assert settings.database_url == DEFAULT_DATABASE_URL
+    assert settings.database_url.get_secret_value() == DEFAULT_DATABASE_URL
     assert (settings.cost_limit_daily_usd, settings.cost_limit_weekly_usd, settings.cost_limit_monthly_usd) == (
         decimal.Decimal(20),
         decimal.Decimal(100),
@@ -71,3 +71,11 @@ def test_missing_required_is_rejected(env: pytest.MonkeyPatch) -> None:
     env.delenv("TELEGRAM_BOT_TOKEN")
     with pytest.raises(pydantic.ValidationError, match="telegram_bot_token"):
         load()
+
+
+def test_database_url_is_masked(env: pytest.MonkeyPatch) -> None:
+    env.setenv("DATABASE_URL", "postgresql+asyncpg://bot:hunter2@db:5432/memes")
+    settings = load()
+    assert "hunter2" not in repr(settings)
+    assert "hunter2" not in str(settings.model_dump())
+    assert settings.database_url.get_secret_value() == "postgresql+asyncpg://bot:hunter2@db:5432/memes"

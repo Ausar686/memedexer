@@ -19,7 +19,8 @@ class DatabaseSettings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", env_ignore_empty=True, extra="ignore")
 
-    database_url: str = DEFAULT_DATABASE_URL
+    # A server URL can embed a password; SecretStr keeps it out of reprs and logs like the other credentials.
+    database_url: pydantic.SecretStr = pydantic.SecretStr(DEFAULT_DATABASE_URL)
 
 
 class Settings(DatabaseSettings):

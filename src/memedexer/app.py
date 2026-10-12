@@ -31,7 +31,7 @@ def build_dispatcher(**context: object) -> Dispatcher:
 
 
 async def run(settings: Settings) -> None:
-    engine = db.create_engine(settings.database_url)
+    engine = db.create_engine(settings.database_url.get_secret_value())
     await db.upgrade(engine)
     sessionmaker = db.create_sessionmaker(engine)
     bot = Bot(settings.telegram_bot_token.get_secret_value(), default=DefaultBotProperties(parse_mode=ParseMode.HTML))
