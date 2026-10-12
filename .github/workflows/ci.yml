@@ -68,3 +68,7 @@ jobs:
           docker run --rm memedexer:ci python -c
           "import asyncio; from memedexer.storage import db;
           asyncio.run(db.upgrade(db.create_engine('sqlite+aiosqlite:////data/memedexer.db')))"
+      - name: Scan the image for fixable high/critical vulnerabilities
+        run: >-
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.67.2
+          image --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 memedexer:ci
