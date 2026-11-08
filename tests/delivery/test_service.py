@@ -638,6 +638,21 @@ async def test_only_rejections_for_a_gone_target_stay_silent(
     assert len(telegram.calls(SendMessage)) == int(alert)
 
 
+async def test_a_long_flood_wait_gives_up_instead_of_holding_the_queue(
+    delivery: Delivery, telegram: FakeTelegram, sleeps: Sleeps, session: AsyncSession, sessionmaker: async_sessionmaker
+) -> None:
+    await seed_chat(session)
+    job = await captioned_job(session)
+    telegram.errors[SendPhoto] = TelegramRetryAfter(SendPhoto(chat_id=CHAT_ID, photo="x"), "flood", retry_after=3600)
+
+    await delivery.deliver(job.id)
+
+    assert sleeps.calls == []
+    assert (await load_job(sessionmaker, job.id)).delivery_error == "Telegram asked to wait 3600 s before sending more"
+    [alert] = telegram.calls(SendMessage)
+    assert "Couldn't post a caption" in alert.text
+
+
 async def test_persistent_network_errors_give_up_and_alert_owner(
     delivery: Delivery, telegram: FakeTelegram, sleeps: Sleeps, session: AsyncSession, sessionmaker: async_sessionmaker
 ) -> None:

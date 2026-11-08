@@ -58,6 +58,8 @@ ALERT_INTERVAL_SECONDS = 60 * 60
 ALERT_ERROR_CHARS = 500
 CLOSE_TIMEOUT_SECONDS = 10.0
 VIDEO_EXTENSIONS = {"video/quicktime": "mov", "video/webm": "webm", "video/x-matroska": "mkv"}
+# A flood wait longer than this would hold the chat's queue for that long; give up and tell the owner instead.
+MAX_RETRY_AFTER_SECONDS = 60
 # Telegram's descriptions (lowercased) for a reply whose target is gone: the original, its topic or the reply to edit
 # was deleted, or the chat can't be seen any more. Nothing to retry and nothing the owner must do; any other rejection
 # is a bug or a setup problem the owner should hear about.
@@ -334,6 +336,9 @@ class Delivery:
             try:
                 return await call()
             except TelegramRetryAfter as exc:
+                if exc.retry_after > MAX_RETRY_AFTER_SECONDS:
+                    message = f"Telegram asked to wait {exc.retry_after} s before sending more"
+                    raise DeliveryFailed(message, alert=True) from exc
                 last_error = exc
                 await self._sleep(exc.retry_after)
             except TelegramForbiddenError as exc:
