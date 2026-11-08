@@ -30,6 +30,7 @@ def test_defaults(env: pytest.MonkeyPatch) -> None:
         decimal.Decimal(100),
         decimal.Decimal(200),
     )
+    assert settings.cost_limit_total_monthly_usd == decimal.Decimal(200)
 
 
 def test_empty_values_fall_back_to_defaults(env: pytest.MonkeyPatch) -> None:

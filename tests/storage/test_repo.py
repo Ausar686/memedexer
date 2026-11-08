@@ -318,10 +318,28 @@ async def test_earlier_budget_exceeded(session: AsyncSession) -> None:
     await _media(session)
     old, first, second = [await _job(session, message_id=i) for i in range(3)]
     for job in (old, first, second):
-        repo.finish_job(job, JobStatus.BUDGET_EXCEEDED)
+        repo.finish_job(job, JobStatus.BUDGET_EXCEEDED, error="daily limit reached")
     old.finished_at = T0 - dt.timedelta(days=1)
     await session.flush()
 
-    assert await repo.earlier_budget_exceeded(session, first, T0) == 0
-    assert await repo.earlier_budget_exceeded(session, second, T0) == 1
-    assert await repo.earlier_budget_exceeded(session, second, T0 - dt.timedelta(days=2)) == 2
+    assert await repo.earlier_budget_exceeded(session, first, T0, any_chat=False) == 0
+    assert await repo.earlier_budget_exceeded(session, second, T0, any_chat=False) == 1
+    assert await repo.earlier_budget_exceeded(session, second, T0 - dt.timedelta(days=2), any_chat=False) == 2
+
+
+async def test_earlier_budget_exceeded_counts_only_the_same_limit_and_optionally_every_chat(
+    session: AsyncSession,
+) -> None:
+    await _chat(session, -100)
+    await _chat(session, -200)
+    await _media(session)
+    weekly = await _job(session, chat_id=-100, message_id=1)
+    other_chat = await _job(session, chat_id=-200, message_id=1)
+    total = await _job(session, chat_id=-100, message_id=2)
+    repo.finish_job(weekly, JobStatus.BUDGET_EXCEEDED, error="weekly limit reached")
+    for job in (other_chat, total):
+        repo.finish_job(job, JobStatus.BUDGET_EXCEEDED, error="total monthly limit reached")
+    await session.flush()
+
+    assert await repo.earlier_budget_exceeded(session, total, T0, any_chat=False) == 0
+    assert await repo.earlier_budget_exceeded(session, total, T0, any_chat=True) == 1

@@ -245,22 +245,25 @@ async def undelivered_jobs(session: AsyncSession, since: dt.datetime) -> list[Jo
     return list(await session.scalars(query))
 
 
-async def earlier_budget_exceeded(session: AsyncSession, job: Job, since: dt.datetime) -> int:
-    """Over-budget jobs of the same chat in the period with a lower id.
+async def earlier_budget_exceeded(session: AsyncSession, job: Job, since: dt.datetime, *, any_chat: bool) -> int:
+    """Jobs stopped by the same limit (same error) in the period with a lower id, in the job's chat or in any chat.
 
     Comparing ids (not "any other job") makes exactly one job, the first, alert even when several finish at once.
     """
     query = sa.select(sa.func.count()).where(
-        Job.chat_id == job.chat_id,
         Job.status == JobStatus.BUDGET_EXCEEDED,
+        Job.error == job.error,
         Job.finished_at >= since,
         Job.id < job.id,
     )
+    if not any_chat:
+        query = query.where(Job.chat_id == job.chat_id)
     return int(await session.scalar(query))
 
 
-async def spent_microusd(session: AsyncSession, chat_id: int, since: dt.datetime) -> int:
-    query = sa.select(sa.func.coalesce(sa.func.sum(Job.cost_microusd), 0)).where(
-        Job.chat_id == chat_id, Job.finished_at >= since
-    )
+async def spent_microusd(session: AsyncSession, chat_id: int | None, since: dt.datetime) -> int:
+    """Spend of one chat, or of all chats when `chat_id` is `None`."""
+    query = sa.select(sa.func.coalesce(sa.func.sum(Job.cost_microusd), 0)).where(Job.finished_at >= since)
+    if chat_id is not None:
+        query = query.where(Job.chat_id == chat_id)
     return int(await session.scalar(query))

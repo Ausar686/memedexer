@@ -1,6 +1,8 @@
-"""Per-chat spend limits over UTC calendar periods."""
+"""Spend limits over UTC calendar periods: per chat, and across all chats."""
 
+import dataclasses
 import datetime as dt
+import decimal
 import enum
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,17 +28,40 @@ def period_starts(now: dt.datetime) -> dict[Period, dt.datetime]:
 
 
 def limits_microusd(settings: Settings) -> dict[Period, int]:
+    """Each chat's own limits."""
     return {
-        Period.DAILY: int(settings.cost_limit_daily_usd * 1_000_000),
-        Period.WEEKLY: int(settings.cost_limit_weekly_usd * 1_000_000),
-        Period.MONTHLY: int(settings.cost_limit_monthly_usd * 1_000_000),
+        Period.DAILY: _microusd(settings.cost_limit_daily_usd),
+        Period.WEEKLY: _microusd(settings.cost_limit_weekly_usd),
+        Period.MONTHLY: _microusd(settings.cost_limit_monthly_usd),
     }
 
 
-async def exceeded_period(session: AsyncSession, chat_id: int, settings: Settings, now: dt.datetime) -> Period | None:
-    """The first period whose limit the chat has reached, if any."""
-    limits = limits_microusd(settings)
-    for period, start in period_starts(now).items():
-        if await repo.spent_microusd(session, chat_id, start) >= limits[period]:
-            return period
+@dataclasses.dataclass(frozen=True)
+class Limit:
+    period: Period
+    microusd: int
+    # Across all chats rather than for one chat.
+    total: bool = False
+
+    def __str__(self) -> str:
+        return f"total {self.period}" if self.total else str(self.period)
+
+
+def limits(settings: Settings) -> list[Limit]:
+    """The chat's own limits, then the total across all chats, in the order they're checked."""
+    chat = [Limit(period, microusd) for period, microusd in limits_microusd(settings).items()]
+    return [*chat, Limit(Period.MONTHLY, _microusd(settings.cost_limit_total_monthly_usd), total=True)]
+
+
+async def exceeded_limit(session: AsyncSession, chat_id: int, settings: Settings, now: dt.datetime) -> Limit | None:
+    """The first limit the chat (or all chats together) has reached, if any."""
+    starts = period_starts(now)
+    for limit in limits(settings):
+        spent = await repo.spent_microusd(session, None if limit.total else chat_id, starts[limit.period])
+        if spent >= limit.microusd:
+            return limit
     return None
+
+
+def _microusd(usd: decimal.Decimal) -> int:
+    return int(usd * 1_000_000)

@@ -159,9 +159,9 @@ class Worker:
                 repo.finish_job(job, JobStatus.DONE)
                 return
 
-        period = await budget.exceeded_period(session, chat.id, self._settings, utcnow())
-        if period is not None:
-            repo.finish_job(job, JobStatus.BUDGET_EXCEEDED, error=f"{period} limit reached")
+        limit = await budget.exceeded_limit(session, chat.id, self._settings, utcnow())
+        if limit is not None:
+            repo.finish_job(job, JobStatus.BUDGET_EXCEEDED, error=f"{limit} limit reached")
             return
 
         provider = self._providers.get(resolved.model.provider)
