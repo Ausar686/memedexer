@@ -88,7 +88,7 @@ async def test_0004_backfills_photo_file_ids(database_url: str) -> None:
             )
         )
 
-    await db.upgrade(engine)
+    await db.upgrade(engine, "0004")
 
     async with engine.connect() as connection:
         rows = dict((await connection.execute(sa.text("SELECT file_unique_id, photo_file_id FROM media"))).all())
@@ -127,3 +127,28 @@ async def test_0005_marks_existing_jobs_as_not_spoilers(database_url: str) -> No
         has_spoiler = await connection.scalar(sa.text("SELECT has_spoiler FROM jobs"))
     await engine.dispose()
     assert has_spoiler == 0
+
+
+async def test_0006_types_existing_media_and_keeps_reply_file_ids(database_url: str) -> None:
+    engine = db.create_engine(database_url)
+    await db.upgrade(engine, "0005")
+    async with engine.begin() as connection:
+        await connection.execute(
+            sa.text(
+                "INSERT INTO media (file_unique_id, file_id, mime_type, width, height, photo_file_id, created_at) "
+                "VALUES "
+                "('photo', 'photo-file', 'image/jpeg', 1280, 960, 'photo-file', '2026-10-01 00:00:00'), "
+                "('doc', 'doc-file', 'image/png', NULL, NULL, 'uploaded', '2026-10-01 00:00:00')"
+            )
+        )
+
+    await db.upgrade(engine)
+
+    async with engine.connect() as connection:
+        rows = (
+            await connection.execute(
+                sa.text("SELECT file_unique_id, media_type, reply_file_id FROM media ORDER BY file_unique_id")
+            )
+        ).all()
+    await engine.dispose()
+    assert [tuple(row) for row in rows] == [("doc", "image_document", "uploaded"), ("photo", "photo", "photo-file")]

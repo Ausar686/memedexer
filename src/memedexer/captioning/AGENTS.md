@@ -22,5 +22,6 @@
 - Unit tests fake the SDK client (see `tests/captioning/fakes.py`) and build
   real SDK response objects with `model_validate`, so a renamed field fails
   loudly.
-- `tests/live/` calls the real APIs on `tests/fixtures/meme.png`; run it with
-  `uv run pytest -m live` after prompt or adapter changes.
+- `tests/live/` calls the real APIs on `tests/fixtures/meme.png` and on a
+  generated video clip; run it with `uv run pytest -m live` after prompt or
+  adapter changes.

@@ -12,7 +12,7 @@ from memedexer.storage.models import DESCRIPTION_LANGUAGE_MAX_LENGTH, NO_TOPIC, 
 from tests.factories import CHAT_ID, THREAD_ID, seed_chat, seed_job
 from tests.telegram.conftest import SpyWorker
 from tests.telegram.fake_api import FakeTelegram
-from tests.telegram.updates import PHOTO_SIZES, message_data, update
+from tests.telegram.updates import PHOTO_SIZES, message_data, update, video
 
 ADMIN = 10
 MEMBER = 11
@@ -215,6 +215,18 @@ async def test_recaption_keeps_the_spoiler_of_the_replied_image(
     assert job.has_spoiler is True
 
 
+async def test_recaption_accepts_a_video(
+    dispatcher: Dispatcher, bot: Bot, session: AsyncSession, sessionmaker: async_sessionmaker
+) -> None:
+    await seed_chat(session)
+
+    await command(dispatcher, bot, "/recaption", reply_to=message_data(message_id=55, video=video()))
+
+    async with sessionmaker() as s:
+        [job] = list(await s.scalars(sa.select(Job)))
+    assert (job.file_unique_id, job.trigger) == ("vid", JobTrigger.RECAPTION)
+
+
 async def test_recaption_needs_an_image_reply(
     dispatcher: Dispatcher, bot: Bot, telegram: FakeTelegram, session: AsyncSession, worker: SpyWorker
 ) -> None:
@@ -224,7 +236,7 @@ async def test_recaption_needs_an_image_reply(
     await command(dispatcher, bot, "/recaption", thread_id=None, reply_to=message_data(message_id=3, text="hi"))
 
     assert worker.notified == 0
-    assert telegram.sent_texts(CHAT_ID) == ["Reply to an image with <code>/recaption</code>."] * 2
+    assert telegram.sent_texts(CHAT_ID) == ["Reply to an image or a video with <code>/recaption</code>."] * 2
 
 
 async def test_language_length_matches_column(

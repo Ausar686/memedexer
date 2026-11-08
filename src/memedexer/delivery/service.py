@@ -1,4 +1,4 @@
-"""Posts captions as silent photo replies and alerts the owner; plugs into the worker as its `JobListener`."""
+"""Posts captions as silent media replies and alerts the owner; plugs into the worker as its `JobListener`."""
 
 import asyncio
 import contextlib
@@ -11,7 +11,15 @@ import aiohttp
 from aiogram import Bot
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
-from aiogram.types import BufferedInputFile, InputFile, InputMediaPhoto, Message, ReplyParameters
+from aiogram.types import (
+    BufferedInputFile,
+    InputFile,
+    InputMediaAnimation,
+    InputMediaPhoto,
+    InputMediaVideo,
+    Message,
+    ReplyParameters,
+)
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from memedexer.config import Settings
@@ -19,9 +27,9 @@ from memedexer.delivery.format import format_caption
 from memedexer.delivery.throttle import Throttle
 from memedexer.pipeline import budget
 from memedexer.pipeline.images import ImageError, prepare_image
-from memedexer.pipeline.worker import Downloader, DownloadError
+from memedexer.pipeline.worker import Downloader, DownloadError, over_download_limit
 from memedexer.storage import repo
-from memedexer.storage.models import NO_TOPIC, Caption, Chat, ChatStatus, Job, JobStatus, Media, utcnow
+from memedexer.storage.models import NO_TOPIC, Caption, Chat, ChatStatus, Job, JobStatus, Media, MediaType, utcnow
 from memedexer.telegram.membership import describe_chat, notify_owner
 
 log = logging.getLogger(__name__)
@@ -33,6 +41,7 @@ SEND_RETRY_SECONDS = 5.0
 ALERT_COOLDOWN = dt.timedelta(hours=1)
 ALERT_ERROR_CHARS = 500
 CLOSE_TIMEOUT_SECONDS = 10.0
+VIDEO_EXTENSIONS = {"video/quicktime": "mov", "video/webm": "webm", "video/x-matroska": "mkv"}
 
 
 class DeliveryFailed(Exception):
@@ -102,6 +111,8 @@ class Delivery:
         match job.status:
             case JobStatus.DONE:
                 self._enqueue(job.chat_id, job.id)
+                if job.thumbnail_only:
+                    await self._notice_thumbnail(job)
             case JobStatus.FAILED | JobStatus.REFUSED:
                 await self._alert_failure(job)
             case JobStatus.BUDGET_EXCEEDED:
@@ -154,8 +165,8 @@ class Delivery:
             stored = await session.get(Job, job_id)
             stored.reply_message_id = reply.message_id
             stored_media = await session.get(Media, media.file_unique_id)
-            if stored_media.photo_file_id is None and reply.photo:
-                stored_media.photo_file_id = reply.photo[-1].file_id
+            if stored_media.reply_file_id is None:
+                stored_media.reply_file_id = _reply_file_id(media.media_type, reply)
             await session.commit()
             # Re-read after the commit: the source may have become a spoiler while this reply was being sent, too
             # late for hide_replies to see the reply.
@@ -165,7 +176,7 @@ class Delivery:
         return None
 
     async def hide_replies(self, chat_id: int, message_id: int) -> None:
-        """Blur the replies to a message whose image was marked as a spoiler after it was captioned."""
+        """Blur the replies to a message whose media was marked as a spoiler after it was captioned."""
         async with self._sessionmaker() as session:
             exposed = [job for job in await repo.jobs_for_message(session, chat_id, message_id) if not job.has_spoiler]
             for job in exposed:
@@ -182,12 +193,24 @@ class Delivery:
             chat = await session.get(Chat, job.chat_id)
             caption = await session.get(Caption, job.caption_id)
             media = await session.get(Media, job.file_unique_id)
+        if media.reply_file_id is None:
+            # The reply went back as a document (a video too big to re-upload), and documents can't be blurred.
+            log.warning("reply of job %d is a document and can't be hidden", job_id)
+            return None
+
+        input_media = {
+            MediaType.PHOTO: InputMediaPhoto,
+            MediaType.IMAGE_DOCUMENT: InputMediaPhoto,
+            MediaType.VIDEO: InputMediaVideo,
+            MediaType.VIDEO_DOCUMENT: InputMediaVideo,
+            MediaType.ANIMATION: InputMediaAnimation,
+        }[media.media_type]
 
         async def edit() -> object:
             await self._throttle.wait(job.chat_id)
             return await self._bot.edit_message_media(
-                InputMediaPhoto(
-                    media=media.photo_file_id,
+                input_media(
+                    media=media.reply_file_id,
                     caption=_caption_html(caption, spoiler=True),
                     parse_mode=ParseMode.HTML,
                     has_spoiler=True,
@@ -205,19 +228,34 @@ class Delivery:
         return None
 
     async def _send(self, job: Job, media: Media, caption: str) -> Message:
+        reply: dict[str, t.Any] = {
+            "chat_id": job.chat_id,
+            "caption": caption,
+            "parse_mode": ParseMode.HTML,
+            "message_thread_id": None if job.thread_id == NO_TOPIC else job.thread_id,
+            "reply_parameters": ReplyParameters(message_id=job.message_id, allow_sending_without_reply=False),
+            "disable_notification": True,
+        }
+
         async def send() -> Message:
-            photo = media.photo_file_id or await self._upload_source(media)
-            await self._throttle.wait(job.chat_id)
-            return await self._bot.send_photo(
-                job.chat_id,
-                photo,
-                caption=caption,
-                parse_mode=ParseMode.HTML,
-                message_thread_id=None if job.thread_id == NO_TOPIC else job.thread_id,
-                reply_parameters=ReplyParameters(message_id=job.message_id, allow_sending_without_reply=False),
-                disable_notification=True,
-                has_spoiler=job.has_spoiler,
-            )
+            match media.media_type:
+                case MediaType.PHOTO | MediaType.IMAGE_DOCUMENT:
+                    photo = media.reply_file_id or await self._upload_image(media)
+                    await self._throttle.wait(job.chat_id)
+                    return await self._bot.send_photo(photo=photo, has_spoiler=job.has_spoiler, **reply)
+                case MediaType.ANIMATION:
+                    await self._throttle.wait(job.chat_id)
+                    return await self._bot.send_animation(
+                        animation=media.reply_file_id, has_spoiler=job.has_spoiler, **reply
+                    )
+                case MediaType.VIDEO_DOCUMENT if media.reply_file_id is None and over_download_limit(media.file_size):
+                    # Too big to download and re-upload as a video, so it goes back as the file it came as.
+                    await self._throttle.wait(job.chat_id)
+                    return await self._bot.send_document(document=media.file_id, **reply)
+                case MediaType.VIDEO | MediaType.VIDEO_DOCUMENT:
+                    video = media.reply_file_id or await self._upload_video(media)
+                    await self._throttle.wait(job.chat_id)
+                    return await self._bot.send_video(video=video, has_spoiler=job.has_spoiler, **reply)
 
         return await self._with_retries(send)
 
@@ -242,12 +280,28 @@ class Delivery:
                 await self._sleep(SEND_RETRY_SECONDS * attempt)
         raise DeliveryFailed(f"gave up after {MAX_SEND_ATTEMPTS} attempts: {last_error}", alert=True)
 
-    async def _upload_source(self, media: Media) -> InputFile:
+    async def _upload_image(self, media: Media) -> InputFile:
         """Image documents can't be re-sent as photos by file id, so upload the prepared image once."""
         data = await self._downloader.download(media.file_id)
         image = await asyncio.to_thread(prepare_image, data, media.mime_type)
         extension = image.media_type.removeprefix("image/")
         return BufferedInputFile(image.data, filename=f"{media.file_unique_id}.{extension}")
+
+    async def _upload_video(self, media: Media) -> InputFile:
+        """Video documents can't be re-sent as videos by file id, so upload the file once."""
+        data = await self._downloader.download(media.file_id)
+        extension = VIDEO_EXTENSIONS.get(media.mime_type, "mp4")
+        return BufferedInputFile(data, filename=f"{media.file_unique_id}.{extension}")
+
+    async def _notice_thumbnail(self, job: Job) -> None:
+        async with self._sessionmaker() as session:
+            chat = await session.get(Chat, job.chat_id)
+        await self._notify(
+            chat,
+            job,
+            f"ℹ️ A video in {describe_chat(chat)} is over the Bot API's 20 MB download limit, so it was captioned "
+            "from its small preview only; text the preview doesn't show is missing.",
+        )
 
     async def _alert_failure(self, job: Job) -> None:
         async with self._sessionmaker() as session:
@@ -272,14 +326,16 @@ class Delivery:
             "Captioning is paused there until the period resets (UTC).",
         )
 
-    async def _notify(self, chat: Chat, job: Job, headline: str, error: str) -> None:
+    async def _notify(self, chat: Chat, job: Job, headline: str, error: str = "") -> None:
         """DM the owner, at most once per chat and error per cooldown so an outage doesn't flood them."""
         key = (chat.id, headline, error)
         now = utcnow()
         if (last := self._last_alert.get(key)) is not None and now - last < ALERT_COOLDOWN:
             return
         self._last_alert[key] = now
-        lines = [headline, f"<code>{html.escape(error[:ALERT_ERROR_CHARS])}</code>"]
+        lines = [headline]
+        if error:
+            lines.append(f"<code>{html.escape(error[:ALERT_ERROR_CHARS])}</code>")
         if link := message_link(chat.id, job.message_id):
             lines.append(link)
         await notify_owner(self._bot, self._settings, "\n".join(lines))
@@ -287,3 +343,15 @@ class Delivery:
 
 def _caption_html(caption: Caption, *, spoiler: bool) -> str:
     return format_caption(caption.text, caption.description, caption.tags, spoiler=spoiler)
+
+
+def _reply_file_id(media_type: MediaType, reply: Message) -> str | None:
+    """The reply's own file id, when it has the type the media's send method needs."""
+    match media_type:
+        case MediaType.PHOTO | MediaType.IMAGE_DOCUMENT if reply.photo:
+            return reply.photo[-1].file_id
+        case MediaType.VIDEO | MediaType.VIDEO_DOCUMENT if reply.video:
+            return reply.video.file_id
+        case MediaType.ANIMATION if reply.animation:
+            return reply.animation.file_id
+    return None

@@ -2,7 +2,8 @@
 
 Turns queued jobs into stored captions. [worker.py](worker.py) runs the loop;
 [resolve.py](resolve.py), [budget.py](budget.py) and [images.py](images.py)
-are pure helpers it calls.
+are pure helpers it calls; [video.py](video.py) samples video frames through
+the child process in [frames.py](frames.py).
 
 ## Job lifecycle
 ```
@@ -20,9 +21,32 @@ For each claimed job the worker, in order:
    daily, weekly or monthly limit (UTC calendar periods, ISO weeks).
 5. Fails it if the resolved provider has no API key.
 6. Downloads the file, fits it to provider limits (≤1568 px per side,
-   ≤3.75 MB raw, otherwise re-encoded as JPEG), and calls the provider.
+   ≤3.75 MB raw, otherwise re-encoded as JPEG), and calls the provider. A
+   video becomes its sampled frames (see below), all in one call; a video
+   over the Bot API's 20 MB download limit becomes its thumbnail and the job
+   is marked `thumbnail_only` (without a thumbnail it fails).
 7. Records usage and `cost_microusd` on the job (also for billed refusals
    and failures), stores the `Caption`, and finishes the job.
+
+## Video frames
+- Positions: `video.FRAME_POSITIONS` (10%, 50%, 90% of the duration). The
+  duration comes from the container, else from Telegram; with neither, the
+  first frame only. Each frame is the first one shown at or after its
+  position, or the last frame when the video ends earlier.
+- Frames are turned upright (phone videos store a display rotation), scaled
+  to `MAX_SIDE` while converting, and re-encoded as JPEG.
+- Near-identical frames (mean colour difference of 16×16 thumbnails below
+  `frames.DUPLICATE_THRESHOLD`) are dropped, so a still picture with music
+  costs one frame.
+- Inputs that can't seek (raw streams) are read in one forward pass, with
+  frame times from the frame rate when frames carry no timestamps.
+- Isolation: decoding untrusted video runs FFmpeg's native code (via PyAV),
+  so it happens in a fresh `python -I -m memedexer.pipeline.frames` process
+  per video, with an empty environment (no tokens), `RLIMIT_AS` 1 GiB (Linux),
+  `RLIMIT_CPU` 10 s and a 15 s wall-clock timeout. The child is killed on
+  timeout or when the job is cancelled; its output is length-framed JPEGs
+  that the parent checks (count, size) before use. Any failure is a
+  non-retryable `VideoError`. The bot process never imports PyAV.
 
 ## Retries
 - Retryable download or provider errors put the job back to `pending` with

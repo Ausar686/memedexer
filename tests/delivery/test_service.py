@@ -7,16 +7,16 @@ from aiogram import Bot
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError, TelegramRetryAfter
-from aiogram.methods import EditMessageMedia, SendMessage, SendPhoto
-from aiogram.types import BufferedInputFile, InputMediaPhoto
+from aiogram.methods import EditMessageMedia, SendAnimation, SendDocument, SendMessage, SendPhoto, SendVideo
+from aiogram.types import BufferedInputFile, InputMediaPhoto, InputMediaVideo
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from memedexer.config import Provider, Settings
 from memedexer.delivery.service import MAX_SEND_ATTEMPTS, Delivery, message_link
 from memedexer.delivery.throttle import Throttle
-from memedexer.pipeline.worker import DownloadError, Worker
+from memedexer.pipeline.worker import MAX_DOWNLOAD_BYTES, DownloadError, Worker
 from memedexer.storage import db, repo
-from memedexer.storage.models import NO_TOPIC, Caption, ChatStatus, Job, JobStatus, Media, utcnow
+from memedexer.storage.models import NO_TOPIC, Caption, ChatStatus, Job, JobStatus, Media, MediaType, utcnow
 from tests.factories import CHAT_ID, THREAD_ID, seed_chat, seed_job
 from tests.fakes import MEME, FakeDownloader, FakeProvider, caption_result
 from tests.telegram.fake_api import FakeTelegram
@@ -75,13 +75,26 @@ async def captioned_job(
     message_id: int = 100,
     thread_id: int = THREAD_ID,
     file_unique_id: str = "uniq",
-    photo_file_id: str | None = "photo-file",
+    reply_file_id: str | None = "photo-file",
     has_spoiler: bool = False,
+    thumbnail_only: bool = False,
+    media_type: MediaType = MediaType.PHOTO,
+    mime_type: str = "image/png",
+    file_size: int | None = None,
 ) -> Job:
-    job = await seed_job(session, message_id=message_id, thread_id=thread_id, file_unique_id=file_unique_id)
+    job = await seed_job(
+        session,
+        message_id=message_id,
+        thread_id=thread_id,
+        file_unique_id=file_unique_id,
+        media_type=media_type,
+        mime_type=mime_type,
+        file_size=file_size,
+    )
     job.has_spoiler = has_spoiler
+    job.thumbnail_only = thumbnail_only
     media = await session.get(Media, file_unique_id)
-    media.photo_file_id = photo_file_id
+    media.reply_file_id = reply_file_id
     caption = Caption(
         file_unique_id=file_unique_id,
         provider="anthropic",
@@ -253,8 +266,8 @@ async def test_document_is_uploaded_once_then_reused(
     sessionmaker: async_sessionmaker,
 ) -> None:
     await seed_chat(session)
-    first = await captioned_job(session, message_id=1, photo_file_id=None)
-    second = await captioned_job(session, message_id=2, photo_file_id=None)
+    first = await captioned_job(session, message_id=1, reply_file_id=None)
+    second = await captioned_job(session, message_id=2, reply_file_id=None)
 
     await delivery.deliver(first.id)
     await delivery.deliver(second.id)
@@ -265,7 +278,128 @@ async def test_document_is_uploaded_once_then_reused(
     assert reuse.photo == "photo-1000"
     assert downloader.file_ids == ["file-uniq"]
     async with sessionmaker() as s:
-        assert (await s.get(Media, "uniq")).photo_file_id == "photo-1000"
+        assert (await s.get(Media, "uniq")).reply_file_id == "photo-1000"
+
+
+async def test_video_is_re_sent_by_file_id(
+    delivery: Delivery, telegram: FakeTelegram, downloader: FakeDownloader, session: AsyncSession
+) -> None:
+    await seed_chat(session)
+    job = await captioned_job(session, media_type=MediaType.VIDEO, reply_file_id="file-uniq", has_spoiler=True)
+
+    await delivery.deliver(job.id)
+
+    [sent] = telegram.calls(SendVideo)
+    assert (sent.video, sent.has_spoiler, sent.message_thread_id) == ("file-uniq", True, THREAD_ID)
+    assert (sent.reply_parameters.message_id, sent.disable_notification) == (100, True)
+    assert sent.caption == SPOILER_CAPTION
+    assert downloader.file_ids == []
+
+
+async def test_animation_is_re_sent_as_an_animation(
+    delivery: Delivery, telegram: FakeTelegram, session: AsyncSession
+) -> None:
+    await seed_chat(session)
+    job = await captioned_job(session, media_type=MediaType.ANIMATION, reply_file_id="file-uniq")
+
+    await delivery.deliver(job.id)
+
+    [sent] = telegram.calls(SendAnimation)
+    assert (sent.animation, sent.has_spoiler) == ("file-uniq", False)
+    assert telegram.calls(SendPhoto) == telegram.calls(SendVideo) == []
+
+
+async def test_video_document_is_uploaded_once_as_a_video_then_reused(
+    delivery: Delivery,
+    telegram: FakeTelegram,
+    downloader: FakeDownloader,
+    session: AsyncSession,
+    sessionmaker: async_sessionmaker,
+) -> None:
+    await seed_chat(session)
+    common = {"media_type": MediaType.VIDEO_DOCUMENT, "mime_type": "video/quicktime", "reply_file_id": None}
+    first = await captioned_job(session, message_id=1, **common)
+    second = await captioned_job(session, message_id=2, **common)
+
+    await delivery.deliver(first.id)
+    await delivery.deliver(second.id)
+
+    upload, reuse = telegram.calls(SendVideo)
+    assert isinstance(upload.video, BufferedInputFile)
+    assert (upload.video.filename, upload.video.data) == ("uniq.mov", MEME)
+    assert reuse.video == "video-1000"
+    assert downloader.file_ids == ["file-uniq"]
+    async with sessionmaker() as s:
+        assert (await s.get(Media, "uniq")).reply_file_id == "video-1000"
+
+
+async def test_video_document_too_big_to_upload_goes_back_as_a_document(
+    delivery: Delivery, telegram: FakeTelegram, downloader: FakeDownloader, session: AsyncSession
+) -> None:
+    await seed_chat(session)
+    job = await captioned_job(
+        session, media_type=MediaType.VIDEO_DOCUMENT, reply_file_id=None, file_size=MAX_DOWNLOAD_BYTES + 1
+    )
+
+    await delivery.deliver(job.id)
+
+    [sent] = telegram.calls(SendDocument)
+    assert (sent.document, sent.reply_parameters.message_id) == ("file-uniq", 100)
+    assert downloader.file_ids == []
+
+
+async def test_thumbnail_only_caption_is_posted_and_the_owner_told(
+    delivery: Delivery, telegram: FakeTelegram, session: AsyncSession
+) -> None:
+    await seed_chat(session)
+    job = await captioned_job(session, media_type=MediaType.VIDEO, reply_file_id="file-uniq", thumbnail_only=True)
+
+    await delivery.job_finished(job)
+    await delivery.join()
+
+    assert len(telegram.calls(SendVideo)) == 1
+    [notice] = telegram.calls(SendMessage)
+    assert notice.chat_id == OWNER
+    headline, link = notice.text.splitlines()
+    assert "over the Bot API's 20 MB download limit" in headline
+    assert link == f"https://t.me/c/{str(CHAT_ID)[4:]}/100"
+
+
+async def test_hiding_a_video_reply_edits_it_as_a_video(
+    delivery: Delivery, telegram: FakeTelegram, session: AsyncSession
+) -> None:
+    await seed_chat(session)
+    job = await captioned_job(session, media_type=MediaType.VIDEO, reply_file_id="file-uniq")
+    await delivery.deliver(job.id)
+
+    await delivery.hide_replies(CHAT_ID, 100)
+
+    [edit] = telegram.calls(EditMessageMedia)
+    assert isinstance(edit.media, InputMediaVideo)
+    assert (edit.media.media, edit.media.has_spoiler) == ("file-uniq", True)
+
+
+async def test_hiding_skips_a_reply_sent_back_as_a_document(
+    delivery: Delivery, telegram: FakeTelegram, session: AsyncSession
+) -> None:
+    await seed_chat(session)
+    # The message first held a video document too big to re-upload, then was edited to a photo.
+    document = await captioned_job(
+        session,
+        file_unique_id="vdoc",
+        media_type=MediaType.VIDEO_DOCUMENT,
+        reply_file_id=None,
+        file_size=MAX_DOWNLOAD_BYTES + 1,
+    )
+    photo = await captioned_job(session)
+    await delivery.deliver(document.id)
+    await delivery.deliver(photo.id)
+
+    await delivery.hide_replies(CHAT_ID, 100)
+
+    [edit] = telegram.calls(EditMessageMedia)
+    assert (edit.message_id, edit.media.media) == (1001, "photo-file")
+    assert telegram.calls(SendMessage) == []
 
 
 async def test_retry_after_is_honored(
@@ -322,7 +456,7 @@ async def test_broken_document_alerts_owner(
     delivery: Delivery, telegram: FakeTelegram, downloader: FakeDownloader, session: AsyncSession
 ) -> None:
     await seed_chat(session)
-    job = await captioned_job(session, photo_file_id=None)
+    job = await captioned_job(session, reply_file_id=None)
     downloader.result = DownloadError("file is too big", retryable=False)
 
     await delivery.deliver(job.id)

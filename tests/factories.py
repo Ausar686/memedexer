@@ -1,7 +1,9 @@
+import typing as t
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from memedexer.storage import repo
-from memedexer.storage.models import NO_TOPIC, ChatStatus, Job, JobTrigger
+from memedexer.storage.models import NO_TOPIC, ChatStatus, Job, JobTrigger, MediaType
 
 CHAT_ID = -1001
 THREAD_ID = 7
@@ -30,16 +32,17 @@ async def seed_job(
     message_id: int = 100,
     file_unique_id: str = "uniq",
     mime_type: str = "image/png",
+    media_type: MediaType = MediaType.IMAGE_DOCUMENT,
     trigger: JobTrigger = JobTrigger.MESSAGE,
+    **media: t.Any,
 ) -> Job:
     await repo.upsert_media(
         session,
         file_unique_id=file_unique_id,
         file_id=f"file-{file_unique_id}",
+        media_type=media_type,
         mime_type=mime_type,
-        width=None,
-        height=None,
-        file_size=None,
+        **({"width": None, "height": None, "file_size": None} | media),
     )
     job = await repo.enqueue_job(
         session,

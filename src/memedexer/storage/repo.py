@@ -14,6 +14,7 @@ from memedexer.storage.models import (
     JobStatus,
     JobTrigger,
     Media,
+    MediaType,
     Topic,
     utcnow,
 )
@@ -76,24 +77,30 @@ async def upsert_media(
     *,
     file_unique_id: str,
     file_id: str,
+    media_type: MediaType,
     mime_type: str,
     width: int | None,
     height: int | None,
     file_size: int | None,
-    photo_file_id: str | None = None,
+    duration: int | None = None,
+    thumbnail_file_id: str | None = None,
+    reply_file_id: str | None = None,
 ) -> Media:
-    """`file_id` rotates over time for the same file, so the latest one wins; a known `photo_file_id` is kept."""
+    """`file_id` rotates over time for the same file, so the latest one wins; a known `reply_file_id` is kept."""
     media = await session.get(Media, file_unique_id)
     if media is None:
         media = Media(file_unique_id=file_unique_id)
         session.add(media)
     media.file_id = file_id
+    media.media_type = media_type
     media.mime_type = mime_type
     media.width = width
     media.height = height
     media.file_size = file_size
-    if photo_file_id is not None:
-        media.photo_file_id = photo_file_id
+    media.duration = duration
+    media.thumbnail_file_id = thumbnail_file_id
+    if reply_file_id is not None:
+        media.reply_file_id = reply_file_id
     await session.flush()
     return media
 

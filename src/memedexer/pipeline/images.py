@@ -24,9 +24,14 @@ def prepare_image(data: bytes, media_type: str) -> Image:
             fits = max(source.size) <= MAX_SIDE and len(data) <= MAX_BYTES
             if fits and media_type in SUPPORTED_MEDIA_TYPES:
                 return Image(data, media_type)
-            return Image(_to_jpeg(source), "image/jpeg")
+            return encode_jpeg(source)
     except (PIL.UnidentifiedImageError, PIL.Image.DecompressionBombError, OSError) as exc:
         raise ImageError(f"cannot decode image: {exc}") from exc
+
+
+def encode_jpeg(source: PIL.Image.Image) -> Image:
+    """Re-encode a decoded picture as a JPEG within `MAX_SIDE`."""
+    return Image(_to_jpeg(source), "image/jpeg")
 
 
 def _to_jpeg(source: PIL.Image.Image) -> bytes:

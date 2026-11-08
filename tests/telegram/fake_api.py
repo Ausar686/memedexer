@@ -4,7 +4,17 @@ import typing as t
 
 from aiogram import Bot
 from aiogram.client.session.base import BaseSession
-from aiogram.methods import GetChat, GetChatMember, GetMe, SendMessage, SendPhoto, TelegramMethod
+from aiogram.methods import (
+    GetChat,
+    GetChatMember,
+    GetMe,
+    SendAnimation,
+    SendDocument,
+    SendMessage,
+    SendPhoto,
+    SendVideo,
+    TelegramMethod,
+)
 from aiogram.types import ChatFullInfo, ChatMemberMember, ChatMemberOwner, Message, User
 
 
@@ -53,6 +63,21 @@ class FakeTelegram(BaseSession):
                         {"file_id": f"small-{message_id}", "file_unique_id": "s", "width": 90, "height": 90},
                         {"file_id": f"photo-{message_id}", "file_unique_id": "p", "width": 1280, "height": 960},
                     ],
+                }
+            )
+        if isinstance(method, SendVideo | SendAnimation | SendDocument):
+            message_id = next(self._message_ids)
+            field = {SendVideo: "video", SendAnimation: "animation", SendDocument: "document"}[type(method)]
+            sent = {"file_id": f"{field}-{message_id}", "file_unique_id": "v"}
+            if field != "document":
+                sent |= {"width": 1280, "height": 720, "duration": 10}
+            return Message.model_validate(
+                {
+                    "message_id": message_id,
+                    "date": 0,
+                    "chat": {"id": method.chat_id, "type": "supergroup"},
+                    "caption": method.caption,
+                    field: sent,
                 }
             )
         if isinstance(method, GetChatMember):

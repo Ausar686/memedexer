@@ -63,6 +63,27 @@ def document(mime_type: str = "image/png", file_size: int = 50_000, unique: str 
     return {"file_id": f"file-{unique}", "file_unique_id": unique, "mime_type": mime_type, "file_size": file_size}
 
 
+THUMBNAIL = {"file_id": "thumb", "file_unique_id": "uthumb", "width": 320, "height": 180, "file_size": 9_000}
+
+
+def video(file_size: int = 5_000_000, unique: str = "vid", **fields: t.Any) -> dict[str, t.Any]:
+    return {
+        "file_id": f"file-{unique}",
+        "file_unique_id": unique,
+        "width": 1280,
+        "height": 720,
+        "duration": 12,
+        "mime_type": "video/mp4",
+        "file_size": file_size,
+        "thumbnail": THUMBNAIL,
+        **fields,
+    }
+
+
+def animation(unique: str = "gif", **fields: t.Any) -> dict[str, t.Any]:
+    return video(file_size=800_000, unique=unique, duration=3, **fields)
+
+
 def administrator() -> dict[str, t.Any]:
     fields = ChatMemberAdministrator.model_fields
     flags = {name: False for name, field in fields.items() if field.is_required() and field.annotation is bool}

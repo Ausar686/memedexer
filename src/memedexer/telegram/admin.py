@@ -16,7 +16,7 @@ from memedexer.pipeline.resolve import resolve_caption_settings
 from memedexer.storage import repo
 from memedexer.storage.models import DESCRIPTION_LANGUAGE_MAX_LENGTH, Chat, ChatStatus, JobTrigger, Topic, utcnow
 from memedexer.telegram.handlers import Notifier
-from memedexer.telegram.media import extract_image, topic_id
+from memedexer.telegram.media import extract_media, save_media, topic_id
 
 _in_group = F.chat.type.in_({"group", "supergroup"})
 _LANGUAGE = re.compile(rf"^[^\W\d_][\w\s()-]{{0,{DESCRIPTION_LANGUAGE_MAX_LENGTH - 1}}}$")
@@ -194,9 +194,9 @@ async def recaption(
     worker: Notifier,
 ) -> None:
     target = message.reply_to_message
-    image = extract_image(target) if target is not None else None
-    if image is None:
-        await message.reply("Reply to an image with <code>/recaption</code>.")
+    media = extract_media(target) if target is not None else None
+    if media is None:
+        await message.reply("Reply to an image or a video with <code>/recaption</code>.")
         return
     if not await is_chat_admin(bot, message, settings):
         await message.reply(ADMINS_ONLY)
@@ -205,22 +205,13 @@ async def recaption(
         chat = await _approved_chat(session, message)
         if chat is None:
             return
-        await repo.upsert_media(
-            session,
-            file_unique_id=image.file_unique_id,
-            file_id=image.file_id,
-            mime_type=image.mime_type,
-            width=image.width,
-            height=image.height,
-            file_size=image.file_size,
-            photo_file_id=image.photo_file_id,
-        )
+        await save_media(session, media)
         await repo.enqueue_job(
             session,
             chat_id=chat.id,
             thread_id=topic_id(target),
             message_id=target.message_id,
-            file_unique_id=image.file_unique_id,
+            file_unique_id=media.file_unique_id,
             trigger=JobTrigger.RECAPTION,
             has_spoiler=bool(target.has_media_spoiler),
         )

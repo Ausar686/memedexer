@@ -5,8 +5,9 @@ group images into jobs, and the Bot API downloader the worker uses. Routers
 are built per dispatcher (`build_*_router`) and wired in `app.build_dispatcher`.
 
 ## Ingestion ([handlers.py](handlers.py))
-- Listens to `message` and `edited_message` updates with a photo or document
-  in groups and supergroups (private chats are ignored).
+- Listens to `message` and `edited_message` updates with a photo, video,
+  GIF (`animation`) or document in groups and supergroups (private chats are
+  ignored).
 - A job is enqueued only when the chat is `approved` **and** the message's
   topic has `captioning_enabled`. Everything else is ignored silently.
 - Topic: `message_thread_id` when `is_topic_message` is set, otherwise
@@ -23,8 +24,12 @@ are built per dispatcher (`build_*_router`) and wired in `app.build_dispatcher`.
 ## Which file ([media.py](media.py))
 - Photos: the largest size whose longer side fits `pipeline.images.MAX_SIDE`,
   else the smallest. Dedup keys on that size's `file_unique_id`.
-- Documents: only `image/jpeg`, `image/png`, `image/webp`, up to the Bot
-  API's 20 MB download limit. Their dimensions are unknown until downloaded.
+- Documents: `image/jpeg`, `image/png`, `image/webp` up to the Bot API's
+  20 MB download limit, and any `video/*`. Their dimensions are unknown.
+- Videos and GIFs: the file itself, with its duration and thumbnail; one over
+  the download limit is still accepted and captioned from the thumbnail.
+  Telegram also sets `document` on GIFs, so `animation` is checked first.
+- Video notes (round videos) and stickers are ignored.
 
 ## Chat lifecycle ([membership.py](membership.py))
 | Event | Effect |
@@ -46,7 +51,7 @@ a warning if the owner can't be reached ([setup.py](setup.py)).
 | `/captions on\|off` | admins | Toggle captioning for the current topic |
 | `/model [chat] <model>\|reset` | admins | Override the model for the topic (or with `chat`, the whole chat); model ids come from the allowlist and need a configured key |
 | `/language <language>\|reset` | admins | Description language for the whole chat; `reset` means each meme's own language |
-| `/recaption` (as a reply to an image) | admins | Enqueue a `recaption` job, skipping dedup |
+| `/recaption` (as a reply to an image or a video) | admins | Enqueue a `recaption` job, skipping dedup |
 
 "Admins" means the chat's creator or administrators (checked with
 `getChatMember`), anonymous admins posting as the group, and the owner.
@@ -61,4 +66,5 @@ reply. Command menus are registered at startup.
 
 ## Downloads ([downloader.py](downloader.py))
 `TelegramBadRequest` (e.g. file too big or gone) is permanent. Other API,
-network and timeout errors are retryable.
+network and timeout errors are retryable. Each download may take up to
+`DOWNLOAD_TIMEOUT_SECONDS` (120 s), enough for a 20 MB video on a slow link.

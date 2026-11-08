@@ -1,11 +1,13 @@
 # captioning
 
-Turns one image into a structured caption through a third-party model API.
+Turns one image, or a video's sampled frames, into a structured caption
+through a third-party model API.
 
 ## Contract
-- Input: `Image(data, media_type)` with `media_type` in
-  `SUPPORTED_MEDIA_TYPES` (jpeg/png/gif/webp). Choosing the Telegram size
-  and converting other formats happen upstream.
+- Input: a sequence of `Image(data, media_type)` with `media_type` in
+  `SUPPORTED_MEDIA_TYPES` (jpeg/png/gif/webp): one for a picture, several
+  frames in playback order for a video, all sent in one request. Choosing
+  the Telegram size, sampling frames and converting formats happen upstream.
 - Output: `CaptionResult` (`text`, `description`, `tags`, `languages`, `kind`,
   `usage`), already normalized by `base.parse_payload`:
   - `tags` are Telegram hashtags: `#` prefix, word characters only, words
@@ -39,7 +41,10 @@ Turns one image into a structured caption through a third-party model API.
 - The OpenAI adapter uses Chat Completions rather than the Responses API so a
   future local OpenAI-compatible server can reuse it.
 - Description language: the chat's setting, or the main language of the
-  image's text (English if there's none).
+  text on it (English if there's none).
+- Videos: the system prompt asks for text that stays on screen to be written
+  once and changing text in order of appearance, and for one description of
+  the whole video; the user instruction states the frame count.
 
 ## Costs
 Catalog prices are USD per million tokens, which equals micro-USD per token,

@@ -1,6 +1,7 @@
 """OpenAI adapter over the official `openai` SDK; Chat Completions keeps it usable for OpenAI-compatible servers."""
 
 import base64
+import collections.abc as cabc
 
 import openai
 
@@ -24,8 +25,9 @@ class OpenAIProvider:
     def __init__(self, client: openai.AsyncOpenAI) -> None:
         self._client = client
 
-    async def caption(self, image: Image, *, model: ModelSpec, description_language: str | None) -> CaptionResult:
-        data_url = f"data:{image.media_type};base64,{base64.standard_b64encode(image.data).decode('ascii')}"
+    async def caption(
+        self, images: cabc.Sequence[Image], *, model: ModelSpec, description_language: str | None
+    ) -> CaptionResult:
         extra: dict = {} if model.effort is None else {"reasoning_effort": model.effort}
         try:
             response = await self._client.chat.completions.create(
@@ -36,8 +38,8 @@ class OpenAIProvider:
                     {
                         "role": "user",
                         "content": [
-                            {"type": "image_url", "image_url": {"url": data_url}},
-                            {"type": "text", "text": user_instruction(description_language)},
+                            *(_image_part(image) for image in images),
+                            {"type": "text", "text": user_instruction(description_language, len(images))},
                         ],
                     },
                 ],
@@ -65,3 +67,8 @@ class OpenAIProvider:
         if choice.finish_reason != "stop":
             raise CaptionError(f"unexpected finish reason {choice.finish_reason}", retryable=False, usage=usage)
         return parse_payload(choice.message.content, usage)
+
+
+def _image_part(image: Image) -> dict:
+    data_url = f"data:{image.media_type};base64,{base64.standard_b64encode(image.data).decode('ascii')}"
+    return {"type": "image_url", "image_url": {"url": data_url}}

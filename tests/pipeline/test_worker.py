@@ -8,9 +8,10 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from memedexer.captioning.base import CaptionError, CaptionRefused, Usage
 from memedexer.config import Provider, Settings
-from memedexer.pipeline.worker import MAX_ATTEMPTS, DownloadError, Worker, retry_delay
+from memedexer.pipeline.worker import MAX_ATTEMPTS, MAX_DOWNLOAD_BYTES, DownloadError, Worker, retry_delay
 from memedexer.storage import db, repo
-from memedexer.storage.models import Caption, ChatStatus, Job, JobStatus, JobTrigger, utcnow
+from memedexer.storage.models import Caption, ChatStatus, Job, JobStatus, JobTrigger, MediaType, utcnow
+from tests import videos
 from tests.factories import CHAT_ID, THREAD_ID, seed_chat, seed_job
 from tests.fakes import FakeDownloader, FakeProvider, caption_result
 
@@ -69,7 +70,7 @@ async def test_captions_and_records_cost(
     assert (done.input_tokens, done.output_tokens, done.cost_microusd) == (1000, 100, 100 + 50)
     assert done.finished_at is not None
     assert downloader.file_ids == ["file-uniq"]
-    image, model, language = provider.calls[0]
+    [image], model, language = provider.calls[0]
     assert (image.media_type, model.id, language) == ("image/png", "claude-haiku-5-5", None)
     assert listener.finished == [(job.id, JobStatus.DONE)]
     async with sessionmaker() as s:
@@ -80,6 +81,80 @@ async def test_captions_and_records_cost(
         "anthropic",
         "claude-haiku-5-5",
     )
+
+
+@pytest.mark.parametrize("media_type", [MediaType.VIDEO, MediaType.ANIMATION, MediaType.VIDEO_DOCUMENT])
+async def test_video_is_captioned_from_its_sampled_frames(
+    session: AsyncSession,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    media_type: MediaType,
+) -> None:
+    await seed_chat(session)
+    job = await seed_job(session, media_type=media_type, mime_type="video/mp4", file_size=5_000, duration=10)
+    provider = FakeProvider(caption_result())
+    downloader = FakeDownloader(videos.clip(["red", "green", "blue", "yellow", "white"] * 2))
+
+    await make_worker(sessionmaker, settings, provider, downloader).run_once()
+
+    done = await load_job(sessionmaker, job.id)
+    assert (done.status, done.thumbnail_only) == (JobStatus.DONE, False)
+    assert downloader.file_ids == ["file-uniq"]
+    frames, _, _ = provider.calls[0]
+    assert [frame.media_type for frame in frames] == ["image/jpeg"] * 3
+
+
+async def test_video_over_the_download_limit_is_captioned_from_its_thumbnail(
+    session: AsyncSession, sessionmaker: async_sessionmaker[AsyncSession], settings: Settings
+) -> None:
+    await seed_chat(session)
+    job = await seed_job(
+        session,
+        media_type=MediaType.VIDEO,
+        mime_type="video/mp4",
+        file_size=MAX_DOWNLOAD_BYTES + 1,
+        thumbnail_file_id="thumb",
+    )
+    provider, downloader = FakeProvider(caption_result()), FakeDownloader()
+
+    await make_worker(sessionmaker, settings, provider, downloader).run_once()
+
+    done = await load_job(sessionmaker, job.id)
+    assert (done.status, done.thumbnail_only) == (JobStatus.DONE, True)
+    assert downloader.file_ids == ["thumb"]
+    assert len(provider.calls[0][0]) == 1
+
+
+async def test_video_over_the_download_limit_without_thumbnail_fails(
+    session: AsyncSession, sessionmaker: async_sessionmaker[AsyncSession], settings: Settings
+) -> None:
+    await seed_chat(session)
+    job = await seed_job(
+        session, media_type=MediaType.VIDEO_DOCUMENT, mime_type="video/mp4", file_size=MAX_DOWNLOAD_BYTES + 1
+    )
+    provider, downloader = FakeProvider(caption_result()), FakeDownloader()
+
+    await make_worker(sessionmaker, settings, provider, downloader).run_once()
+
+    failed = await load_job(sessionmaker, job.id)
+    assert (failed.status, failed.attempts) == (JobStatus.FAILED, 1)
+    assert "20 MB download limit and has no thumbnail" in failed.error
+    assert (downloader.file_ids, provider.calls) == ([], [])
+
+
+async def test_undecodable_video_fails_without_retrying(
+    session: AsyncSession, sessionmaker: async_sessionmaker[AsyncSession], settings: Settings
+) -> None:
+    await seed_chat(session)
+    job = await seed_job(session, media_type=MediaType.VIDEO, mime_type="video/mp4", file_size=11)
+    provider, downloader = FakeProvider(caption_result()), FakeDownloader(b"not a video")
+
+    await make_worker(sessionmaker, settings, provider, downloader).run_once()
+
+    failed = await load_job(sessionmaker, job.id)
+    assert (failed.status, failed.attempts) == (JobStatus.FAILED, 1)
+    assert failed.error.startswith("cannot decode video")
+    assert provider.calls == []
 
 
 async def test_empty_queue(sessionmaker: async_sessionmaker[AsyncSession], settings: Settings) -> None:

@@ -1,6 +1,7 @@
 """Claude adapter over the official `anthropic` SDK."""
 
 import base64
+import collections.abc as cabc
 
 import anthropic
 
@@ -25,7 +26,9 @@ class AnthropicProvider:
     def __init__(self, client: anthropic.AsyncAnthropic) -> None:
         self._client = client
 
-    async def caption(self, image: Image, *, model: ModelSpec, description_language: str | None) -> CaptionResult:
+    async def caption(
+        self, images: cabc.Sequence[Image], *, model: ModelSpec, description_language: str | None
+    ) -> CaptionResult:
         output_config: dict = {"format": {"type": "json_schema", "schema": caption_json_schema()}}
         if model.effort is not None:
             output_config["effort"] = model.effort
@@ -38,15 +41,8 @@ class AnthropicProvider:
                     {
                         "role": "user",
                         "content": [
-                            {
-                                "type": "image",
-                                "source": {
-                                    "type": "base64",
-                                    "media_type": image.media_type,
-                                    "data": base64.standard_b64encode(image.data).decode("ascii"),
-                                },
-                            },
-                            {"type": "text", "text": user_instruction(description_language)},
+                            *(_image_block(image) for image in images),
+                            {"type": "text", "text": user_instruction(description_language, len(images))},
                         ],
                     }
                 ],
@@ -65,3 +61,8 @@ class AnthropicProvider:
             raise CaptionError(f"unexpected stop reason {response.stop_reason}", retryable=False, usage=usage)
         text = next((block.text for block in response.content if block.type == "text"), None)
         return parse_payload(text, usage)
+
+
+def _image_block(image: Image) -> dict:
+    data = base64.standard_b64encode(image.data).decode("ascii")
+    return {"type": "image", "source": {"type": "base64", "media_type": image.media_type, "data": data}}

@@ -1,4 +1,4 @@
-"""Background job processing: claim, dedup, budget-check, download, caption, record."""
+"""Background job processing: claim, dedup, budget-check, download, sample frames, caption, record."""
 
 import asyncio
 import datetime as dt
@@ -7,15 +7,17 @@ import typing as t
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from memedexer.captioning.base import CaptionError, CaptionProvider, CaptionRefused, Usage
+from memedexer.captioning.base import CaptionError, CaptionProvider, CaptionRefused, Image, Usage
 from memedexer.captioning.catalog import ModelSpec, cost_microusd
 from memedexer.config import Provider, Settings
 from memedexer.pipeline import budget
 from memedexer.pipeline.images import ImageError, prepare_image
 from memedexer.pipeline.resolve import resolve_caption_settings
+from memedexer.pipeline.video import VideoError, extract_frames
 from memedexer.storage import repo
 from memedexer.storage.models import (
     TERMINAL_JOB_STATUSES,
+    VIDEO_MEDIA_TYPES,
     Caption,
     Chat,
     ChatStatus,
@@ -33,6 +35,8 @@ MAX_ATTEMPTS = 4
 RETRY_BASE_DELAY = dt.timedelta(seconds=30)
 RETRY_MAX_DELAY = dt.timedelta(minutes=15)
 IDLE_POLL_SECONDS = 5.0
+# Bot API `getFile` refuses anything larger.
+MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024
 
 
 class DownloadError(Exception):
@@ -52,6 +56,10 @@ class JobListener(t.Protocol):
 class NullListener:
     async def job_finished(self, job: Job) -> None:
         return None
+
+
+def over_download_limit(file_size: int | None) -> bool:
+    return file_size is not None and file_size > MAX_DOWNLOAD_BYTES
 
 
 def retry_delay(attempts: int) -> dt.timedelta:
@@ -165,18 +173,17 @@ class Worker:
         # Don't hold a database transaction open across the slow download and API call.
         await session.commit()
         try:
-            data = await self._downloader.download(media.file_id)
-            image = await asyncio.to_thread(prepare_image, data, media.mime_type)
+            images = await self._load(job, media)
         except DownloadError as exc:
             self._fail(job, str(exc), retryable=exc.retryable)
             return
-        except ImageError as exc:
+        except (ImageError, VideoError) as exc:
             self._fail(job, str(exc), retryable=False)
             return
 
         try:
             result = await provider.caption(
-                image, model=resolved.model, description_language=resolved.description_language
+                images, model=resolved.model, description_language=resolved.description_language
             )
         except CaptionError as exc:
             self._charge(job, resolved.model, exc.usage)
@@ -201,6 +208,20 @@ class Worker:
         await session.flush()
         job.caption_id = caption.id
         repo.finish_job(job, JobStatus.DONE)
+
+    async def _load(self, job: Job, media: Media) -> list[Image]:
+        """The picture to caption, or a video's sampled frames (its thumbnail when it's too big to download)."""
+        if media.media_type not in VIDEO_MEDIA_TYPES:
+            data = await self._downloader.download(media.file_id)
+            return [await asyncio.to_thread(prepare_image, data, media.mime_type)]
+        if over_download_limit(media.file_size):
+            if media.thumbnail_file_id is None:
+                raise VideoError("the video is over the Bot API's 20 MB download limit and has no thumbnail")
+            job.thumbnail_only = True
+            data = await self._downloader.download(media.thumbnail_file_id)
+            return [await asyncio.to_thread(prepare_image, data, "image/jpeg")]
+        data = await self._downloader.download(media.file_id)
+        return await extract_frames(data, media.duration)
 
     @staticmethod
     def _charge(job: Job, model: ModelSpec, usage: Usage | None) -> None:

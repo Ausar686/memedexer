@@ -1,5 +1,6 @@
-"""Provider-neutral captioning contract: input image, output caption, errors."""
+"""Provider-neutral captioning contract: input images, output caption, errors."""
 
+import collections.abc as cabc
 import dataclasses
 import re
 import typing as t
@@ -68,7 +69,11 @@ class CaptionRefused(CaptionError):
 
 
 class CaptionProvider(t.Protocol):
-    async def caption(self, image: Image, *, model: ModelSpec, description_language: str | None) -> CaptionResult: ...
+    async def caption(
+        self, images: cabc.Sequence[Image], *, model: ModelSpec, description_language: str | None
+    ) -> CaptionResult:
+        """Caption one picture, or a video from several of its frames in playback order."""
+        ...
 
 
 def caption_json_schema() -> dict[str, t.Any]:

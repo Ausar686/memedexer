@@ -38,7 +38,7 @@ def provider(result: object) -> tuple[AnthropicProvider, FakeEndpoint]:
 
 async def test_request_shape(image: Image, haiku: ModelSpec) -> None:
     captioner, endpoint = provider(message())
-    await captioner.caption(image, model=haiku, description_language="Russian")
+    await captioner.caption([image], model=haiku, description_language="Russian")
 
     call = endpoint.last_call
     assert call["model"] == "claude-haiku-5-5"
@@ -55,15 +55,30 @@ async def test_request_shape(image: Image, haiku: ModelSpec) -> None:
     assert "in Russian" in text_block["text"]
 
 
+async def test_video_frames_go_in_one_request_in_order(image: Image, haiku: ModelSpec) -> None:
+    captioner, endpoint = provider(message())
+    frames = [image, Image(b"second", "image/jpeg"), Image(b"third", "image/jpeg")]
+
+    await captioner.caption(frames, model=haiku, description_language=None)
+
+    *image_blocks, text_block = endpoint.last_call["messages"][0]["content"]
+    assert [base64.standard_b64decode(block["source"]["data"]) for block in image_blocks] == [
+        image.data,
+        b"second",
+        b"third",
+    ]
+    assert text_block["text"].startswith("Caption this video from its 3 frames.")
+
+
 async def test_effort_is_omitted_when_unset(image: Image, haiku: ModelSpec) -> None:
     captioner, endpoint = provider(message())
-    await captioner.caption(image, model=ModelSpec(**{**vars(haiku), "effort": None}), description_language=None)
+    await captioner.caption([image], model=ModelSpec(**{**vars(haiku), "effort": None}), description_language=None)
     assert "effort" not in endpoint.last_call["output_config"]
 
 
 async def test_success(image: Image, haiku: ModelSpec) -> None:
     captioner, _ = provider(message())
-    result = await captioner.caption(image, model=haiku, description_language=None)
+    result = await captioner.caption([image], model=haiku, description_language=None)
     assert result.text == json.loads(PAYLOAD_JSON)["text"]
     assert result.tags == ["#testing", "#first_try"]
     assert result.usage == Usage(1500, 120)
@@ -73,7 +88,7 @@ async def test_refusal_keeps_usage(image: Image, haiku: ModelSpec) -> None:
     refused = message("refusal", text=None, stop_details={"type": "refusal", "category": "cyber", "explanation": None})
     captioner, _ = provider(refused)
     with pytest.raises(CaptionRefused, match="cyber") as excinfo:
-        await captioner.caption(image, model=haiku, description_language=None)
+        await captioner.caption([image], model=haiku, description_language=None)
     assert excinfo.value.usage == Usage(1500, 120)
     assert excinfo.value.retryable is False
 
@@ -81,7 +96,7 @@ async def test_refusal_keeps_usage(image: Image, haiku: ModelSpec) -> None:
 async def test_truncated_output_is_permanent_error(image: Image, haiku: ModelSpec) -> None:
     captioner, _ = provider(message("max_tokens", text='{"text": "WHEN'))
     with pytest.raises(CaptionError, match="max_tokens") as excinfo:
-        await captioner.caption(image, model=haiku, description_language=None)
+        await captioner.caption([image], model=haiku, description_language=None)
     assert excinfo.value.retryable is False
     assert excinfo.value.usage == Usage(1500, 120)
 
@@ -99,7 +114,7 @@ async def test_truncated_output_is_permanent_error(image: Image, haiku: ModelSpe
 async def test_sdk_errors_are_classified(image: Image, haiku: ModelSpec, error: Exception, retryable: bool) -> None:
     captioner, _ = provider(error)
     with pytest.raises(CaptionError) as excinfo:
-        await captioner.caption(image, model=haiku, description_language=None)
+        await captioner.caption([image], model=haiku, description_language=None)
     assert excinfo.value.retryable is retryable
     assert excinfo.value.usage is None
     assert excinfo.value.__cause__ is error

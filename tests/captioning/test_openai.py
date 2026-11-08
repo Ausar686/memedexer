@@ -41,7 +41,7 @@ def provider(result: object) -> tuple[OpenAIProvider, FakeEndpoint]:
 
 async def test_request_shape(image: Image, luna: ModelSpec) -> None:
     captioner, endpoint = provider(completion())
-    await captioner.caption(image, model=luna, description_language=None)
+    await captioner.caption([image], model=luna, description_language=None)
 
     call = endpoint.last_call
     assert call["model"] == "gpt-6-luna"
@@ -54,22 +54,36 @@ async def test_request_shape(image: Image, luna: ModelSpec) -> None:
     assert "main language of the text" in text_part["text"]
 
 
+async def test_video_frames_go_in_one_request_in_order(image: Image, luna: ModelSpec) -> None:
+    captioner, endpoint = provider(completion())
+    frames = [image, Image(b"second", "image/jpeg")]
+
+    await captioner.caption(frames, model=luna, description_language=None)
+
+    *image_parts, text_part = endpoint.last_call["messages"][1]["content"]
+    assert [part["image_url"]["url"] for part in image_parts] == [
+        "data:image/png;base64," + base64.standard_b64encode(image.data).decode(),
+        "data:image/jpeg;base64," + base64.standard_b64encode(b"second").decode(),
+    ]
+    assert text_part["text"].startswith("Caption this video from its 2 frames.")
+
+
 async def test_effort_is_omitted_when_unset(image: Image, luna: ModelSpec) -> None:
     captioner, endpoint = provider(completion())
-    await captioner.caption(image, model=ModelSpec(**{**vars(luna), "effort": None}), description_language=None)
+    await captioner.caption([image], model=ModelSpec(**{**vars(luna), "effort": None}), description_language=None)
     assert "reasoning_effort" not in endpoint.last_call
 
 
 async def test_success(image: Image, luna: ModelSpec) -> None:
     captioner, _ = provider(completion())
-    result = await captioner.caption(image, model=luna, description_language=None)
+    result = await captioner.caption([image], model=luna, description_language=None)
     assert result.kind == "meme"
     assert result.usage == Usage(900, 80)
 
 
 async def test_missing_usage_counts_as_zero(image: Image, luna: ModelSpec) -> None:
     captioner, _ = provider(completion(usage=False))
-    result = await captioner.caption(image, model=luna, description_language=None)
+    result = await captioner.caption([image], model=luna, description_language=None)
     assert result.usage == Usage(0, 0)
 
 
@@ -83,7 +97,7 @@ async def test_missing_usage_counts_as_zero(image: Image, luna: ModelSpec) -> No
 async def test_refusals_keep_usage(image: Image, luna: ModelSpec, response: object) -> None:
     captioner, _ = provider(response)
     with pytest.raises(CaptionRefused) as excinfo:
-        await captioner.caption(image, model=luna, description_language=None)
+        await captioner.caption([image], model=luna, description_language=None)
     assert excinfo.value.usage == Usage(900, 80)
 
 
@@ -92,14 +106,14 @@ async def test_empty_choices_is_permanent_error(image: Image, luna: ModelSpec) -
     response.choices = []
     captioner, _ = provider(response)
     with pytest.raises(CaptionError, match="no choices") as excinfo:
-        await captioner.caption(image, model=luna, description_language=None)
+        await captioner.caption([image], model=luna, description_language=None)
     assert excinfo.value.usage == Usage(900, 80)
 
 
 async def test_truncated_output_is_permanent_error(image: Image, luna: ModelSpec) -> None:
     captioner, _ = provider(completion(finish_reason="length", content='{"text": "WH'))
     with pytest.raises(CaptionError, match="length") as excinfo:
-        await captioner.caption(image, model=luna, description_language=None)
+        await captioner.caption([image], model=luna, description_language=None)
     assert excinfo.value.retryable is False
 
 
@@ -115,6 +129,6 @@ async def test_truncated_output_is_permanent_error(image: Image, luna: ModelSpec
 async def test_sdk_errors_are_classified(image: Image, luna: ModelSpec, error: Exception, retryable: bool) -> None:
     captioner, _ = provider(error)
     with pytest.raises(CaptionError) as excinfo:
-        await captioner.caption(image, model=luna, description_language=None)
+        await captioner.caption([image], model=luna, description_language=None)
     assert excinfo.value.retryable is retryable
     assert excinfo.value.__cause__ is error
