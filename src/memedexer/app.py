@@ -2,7 +2,9 @@
 
 import asyncio
 import contextlib
+import ctypes
 import logging
+import sys
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -25,6 +27,7 @@ log = logging.getLogger(__name__)
 # Together they stay within compose's 30 s stop_grace_period, after which Docker kills the process.
 WORKER_STOP_TIMEOUT_SECONDS = 15.0
 DELIVERY_CLOSE_TIMEOUT_SECONDS = 10.0
+PR_SET_DUMPABLE = 4
 
 
 def build_dispatcher(**context: object) -> Dispatcher:
@@ -91,7 +94,21 @@ async def finish(task: asyncio.Task, timeout: float) -> None:
     return None
 
 
+def forbid_inspection() -> None:
+    """Hide this process's environment and memory from other processes of the same user, like the decoder child.
+
+    Its empty environment isn't enough: a compromised child could still read the secrets from `/proc/<pid>/environ`.
+    """
+    if sys.platform != "linux":
+        return None
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.prctl(PR_SET_DUMPABLE, 0, 0, 0, 0) != 0:
+        raise OSError(ctypes.get_errno(), "prctl(PR_SET_DUMPABLE) failed")
+    return None
+
+
 def main() -> None:
+    forbid_inspection()
     settings = Settings()
     logging.basicConfig(level=settings.log_level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     redaction.install(settings.secret_values)
