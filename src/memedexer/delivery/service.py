@@ -25,6 +25,7 @@ from aiogram.types import (
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from memedexer.config import Settings
+from memedexer.cooldown import Cooldown
 from memedexer.delivery.format import format_caption
 from memedexer.delivery.throttle import Throttle
 from memedexer.pipeline import budget
@@ -53,7 +54,7 @@ log = logging.getLogger(__name__)
 UNDELIVERED_LOOKBACK = dt.timedelta(hours=24)
 MAX_SEND_ATTEMPTS = 4
 SEND_RETRY_SECONDS = 5.0
-ALERT_COOLDOWN = dt.timedelta(hours=1)
+ALERT_INTERVAL_SECONDS = 60 * 60
 ALERT_ERROR_CHARS = 500
 CLOSE_TIMEOUT_SECONDS = 10.0
 VIDEO_EXTENSIONS = {"video/quicktime": "mov", "video/webm": "webm", "video/x-matroska": "mkv"}
@@ -90,7 +91,7 @@ class Delivery:
         self._sleep = sleep
         self._queues: dict[int, asyncio.Queue[int]] = {}
         self._tasks: dict[int, asyncio.Task[None]] = {}
-        self._last_alert: dict[tuple[int, str, str], dt.datetime] = {}
+        self._alerts = Cooldown(ALERT_INTERVAL_SECONDS)
 
     async def start(self) -> None:
         """Re-queue replies a restart interrupted."""
@@ -386,15 +387,16 @@ class Delivery:
         )
 
     async def _notify(self, chat: Chat, job: Job, headline: str, error: str = "") -> None:
-        """DM the owner, at most once per chat and error per cooldown so an outage doesn't flood them."""
-        key = (chat.id, headline, error)
-        now = utcnow()
-        if (last := self._last_alert.get(key)) is not None and now - last < ALERT_COOLDOWN:
+        """DM the owner, at most once per chat and kind of alert per interval, so an outage or a flood of bad files
+        doesn't flood them; the error text isn't part of the key, since it can differ for every file."""
+        key = (chat.id, headline)
+        if not self._alerts.ready(key):
             return
-        self._last_alert[key] = now
         lines = [headline]
         if error:
             lines.append(f"<code>{html.escape(error[:ALERT_ERROR_CHARS])}</code>")
+        if suppressed := self._alerts.pop_suppressed(key):
+            lines.append(f"({suppressed} more like this in the last hour weren't sent.)")
         if link := message_link(chat.id, job.message_id):
             lines.append(link)
         await notify_owner(self._bot, self._settings, "\n".join(lines))
