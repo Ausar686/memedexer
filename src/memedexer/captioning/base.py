@@ -11,9 +11,20 @@ from memedexer.captioning.catalog import ModelSpec
 
 SUPPORTED_MEDIA_TYPES = frozenset({"image/jpeg", "image/png", "image/gif", "image/webp"})
 MAX_TAGS = 4
+# The model's output is as untrusted as the image it read: text on an image can steer it. These bound what gets stored
+# and posted; a real caption stays well within them.
+MAX_TEXT_CHARS = 4000
+MAX_DESCRIPTION_CHARS = 500
+# Of a tag's text after the `#`.
+MAX_TAG_CHARS = 64
+MAX_LANGUAGES = 5
 CaptionKind = t.Literal["meme", "screenshot", "photo", "other"]
 
 _NON_TAG_CHARS = re.compile(r"[^\w]+")
+_LANGUAGE_CODE = re.compile(r"[a-z]{2,3}")
+# Control characters (line breaks and tabs aside) and the bidirectional overrides and isolates, which can make posted
+# text read differently from what it contains. Zero-width joiners stay: emoji sequences need them.
+_UNSAFE_CHARS = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -80,9 +91,18 @@ def caption_json_schema() -> dict[str, t.Any]:
     return CaptionPayload.model_json_schema()
 
 
+def clean_text(raw: str, limit: int) -> str:
+    """Drop unsafe characters and cap the length, marking a cut with an ellipsis."""
+    text = _UNSAFE_CHARS.sub("", raw).strip()
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
 def normalize_tag(raw: str) -> str | None:
-    """Make a Telegram hashtag: word characters only, words joined by `_`, not all digits."""
-    body = _NON_TAG_CHARS.sub("_", raw.strip().lstrip("#")).strip("_")
+    """Make a Telegram hashtag: word characters only, words joined by `_`, not all digits.
+
+    The part after `#` is at most `MAX_TAG_CHARS` long.
+    """
+    body = _NON_TAG_CHARS.sub("_", raw.strip().lstrip("#")).strip("_")[:MAX_TAG_CHARS].rstrip("_")
     if not body or body.replace("_", "").isdigit():
         return None
     return f"#{body}"
@@ -109,13 +129,19 @@ def parse_payload(raw: str | None, usage: Usage) -> CaptionResult:
     except pydantic.ValidationError as exc:
         raise CaptionError(f"response does not match the caption schema: {exc}", retryable=False, usage=usage) from exc
     return CaptionResult(
-        text=payload.text.strip(),
-        description=payload.description.strip(),
+        text=clean_text(payload.text, MAX_TEXT_CHARS),
+        description=clean_text(payload.description, MAX_DESCRIPTION_CHARS),
         tags=normalize_tags(payload.tags),
-        languages=list(dict.fromkeys(code.strip().lower() for code in payload.languages if code.strip())),
+        languages=normalize_languages(payload.languages),
         kind=payload.kind,
         usage=usage,
     )
+
+
+def normalize_languages(raw: list[str]) -> list[str]:
+    """ISO 639 codes only, lowercase, deduplicated, at most `MAX_LANGUAGES`."""
+    codes = (code.strip().lower() for code in raw)
+    return list(dict.fromkeys(code for code in codes if _LANGUAGE_CODE.fullmatch(code)))[:MAX_LANGUAGES]
 
 
 def is_retryable_status(status_code: int) -> bool:

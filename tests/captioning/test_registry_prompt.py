@@ -4,7 +4,7 @@ from memedexer.captioning.catalog import UnknownModelError
 from memedexer.captioning.prompt import user_instruction
 from memedexer.captioning.providers.anthropic import AnthropicProvider
 from memedexer.captioning.providers.openai import OpenAIProvider
-from memedexer.captioning.registry import build_providers
+from memedexer.captioning.registry import REQUEST_TIMEOUT_SECONDS, build_providers
 from memedexer.config import Provider, Settings
 
 
@@ -21,6 +21,14 @@ def test_builds_only_providers_with_keys(monkeypatch: pytest.MonkeyPatch) -> Non
 
     providers = build_providers(settings(openai_api_key="sk-oai"))
     assert isinstance(providers[Provider.OPENAI], OpenAIProvider)
+
+
+def test_clients_time_out_and_leave_retries_to_the_worker() -> None:
+    providers = build_providers(settings(openai_api_key="sk-oai"))
+
+    for provider in providers.values():
+        assert (provider._client.timeout, provider._client.max_retries) == (REQUEST_TIMEOUT_SECONDS, 0)
+    assert REQUEST_TIMEOUT_SECONDS == 90
 
 
 def test_unknown_default_model_fails_fast() -> None:

@@ -13,12 +13,19 @@ through a third-party model API.
   - `tags` are Telegram hashtags: `#` prefix, word characters only, words
     joined by `_`, not all digits, deduplicated ignoring case, at most
     `MAX_TAGS`.
-  - `languages` are lowercase and deduplicated.
+  - `languages` are ISO 639 codes (two or three letters), lowercase,
+    deduplicated, at most `MAX_LANGUAGES`; anything else is dropped.
+  - `text` and `description` lose control characters (except line breaks
+    and tabs) and bidirectional overrides, and are capped at
+    `MAX_TEXT_CHARS` / `MAX_DESCRIPTION_CHARS` with `…`; a tag's text after
+    the `#` at `MAX_TAG_CHARS`. Text on an image can steer the model, so its output is
+    treated as untrusted.
 - Failures raise `CaptionError(retryable=...)`; `CaptionRefused` is a
   non-retryable subclass. Both carry `usage` when the provider billed the
   call, so budgets count it.
-  - Retryable: connection errors and HTTP 408/409/429/5xx (after the SDK's own
-    retries).
+  - Retryable: connection errors, timeouts and HTTP 408/409/429/5xx. The SDK
+    clients time out after `registry.REQUEST_TIMEOUT_SECONDS` (90 s) and don't
+    retry on their own, so every attempt is the worker's and is counted.
   - Permanent: other HTTP errors, refusals, truncated output, and replies that
     don't match the schema.
 
@@ -28,7 +35,7 @@ through a third-party model API.
 | [base.py](base.py) | Types, the `CaptionProvider` protocol, the JSON schema (`CaptionPayload`), normalization |
 | [prompt.py](prompt.py) | System prompt and the per-call language instruction |
 | [catalog.py](catalog.py) | Model allowlist with prices and reasoning effort; `cost_microusd` |
-| [registry.py](registry.py) | Builds a provider per configured API key; fails fast on a default model that isn't allowlisted |
+| [registry.py](registry.py) | Builds a provider per configured API key with a request timeout and no SDK retries; fails fast on a default model that isn't allowlisted |
 | [providers/](providers) | `AnthropicProvider` (Messages API) and `OpenAIProvider` (Chat Completions) |
 
 ## Behavior worth knowing
