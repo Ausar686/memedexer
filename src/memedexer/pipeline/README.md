@@ -23,9 +23,10 @@ For each claimed job the worker, in order:
 5. Fails it if the resolved provider has no API key.
 6. Downloads the file, fits it to provider limits in the sandbox (see
    below), and calls the provider. A video becomes its sampled frames, all
-   in one call; a video
-   over the Bot API's 20 MB download limit becomes its thumbnail and the job
-   is marked `thumbnail_only` (without a thumbnail it fails).
+   in one call; a video over the Bot API's 20 MB download limit (by its
+   stated size, or because Telegram refuses it as too big) becomes its
+   thumbnail and the job is marked `thumbnail_only` (without a thumbnail it
+   fails).
 7. Records usage and `cost_microusd` on the job (also for billed refusals
    and failures), stores the `Caption`, and finishes the job.
 
@@ -39,19 +40,26 @@ For each claimed job the worker, in order:
   re-encoded as JPEG, flattened onto white.
 
 ## Video frames
-- Positions: `sandbox.FRAME_POSITIONS` (10%, 50%, 90% of the duration). The
-  duration comes from the container, else from Telegram; with neither, the
-  first frame only. Each frame is the first one shown at or after its
+- Positions: `sandbox.FRAME_POSITIONS` (10%, 50%, 90% of the duration),
+  counted from the stream's first timestamp (not always 0, e.g. in MPEG-TS).
+  The duration comes from the container, else from Telegram; with neither,
+  the first frame only. Each frame is the first one shown at or after its
   position, or the last frame when the video ends earlier.
-- Frames are turned upright (phone videos store a display rotation), scaled
-  to `MAX_SIDE` while converting, and re-encoded as JPEG.
+- Frames are turned upright (phone videos store a display rotation), shown at
+  their display shape (anamorphic video stores non-square pixels; ratios
+  beyond 4:1 are clamped), scaled to `MAX_SIDE` while converting, and
+  re-encoded as JPEG.
 - Near-identical frames (mean colour difference of 16×16 thumbnails below
   `frames.DUPLICATE_THRESHOLD`) are dropped, so a still picture with music
   costs one frame.
-- Inputs that can't seek (raw streams) are read in one forward pass, with
-  frame times from the frame rate when frames carry no timestamps.
+- Inputs that can't seek (raw streams), seek imprecisely (a seek that lands
+  past its target, as in MPEG streams) or lack timestamps are read in one
+  forward pass instead, with frame times from the frame rate when frames
+  carry none.
 - Only the demuxers in `frames.DEMUXERS` are opened (MP4/MOV, Matroska/WebM,
-  AVI, MPEG-TS/PS, FLV, ASF, GIF, raw H.264/HEVC).
+  AVI, MPEG-TS/PS, FLV, ASF, GIF, raw H.264/HEVC), and only the decoders in
+  `frames.DECODERS` run (H.264, HEVC, VP8/9, AV1, MPEG-1/2/4, H.263, FLV,
+  WMV/VC-1, MJPEG, GIF), also while FFmpeg probes the streams.
 
 ## Decoding sandbox
 Pillow and FFmpeg (via PyAV) are native code parsing files anyone in a chat

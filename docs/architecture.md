@@ -32,14 +32,15 @@ update (photo / video / GIF / image or video document) in an approved chat
   (skipping fade-ins and end cards), sent as a list in one request so the
   model writes text that stays on screen once and describes the video as a
   whole. Near-identical frames are dropped, so a still picture with music
-  costs one frame. Spoken words aren't captioned. Videos over the Bot API's 20 MB download limit are captioned from
-  Telegram's small thumbnail instead; the job is marked `thumbnail_only` and
-  the owner gets a DM.
+  costs one frame. Spoken words aren't captioned. Videos over the Bot API's
+  20 MB download limit (or that Telegram refuses as too big) are captioned
+  from Telegram's small thumbnail instead; the job is marked
+  `thumbnail_only` and the owner gets a DM.
 - **Decoding:** images and videos are decoded in a separate, short-lived
   process per file with no secrets in its environment and memory, CPU, file
   and time limits; only JPEG/PNG/WebP images (judged by content, not the
-  declared type), common video containers and images up to 64 MP are opened.
-  A malformed or malicious file fails one job, not the bot.
+  declared type) up to 64 MP and common video containers and codecs are
+  opened. A malformed or malicious file fails one job, not the bot.
 - **Topics:** captioning is a per-topic flag, off by default, toggled by chat
   admins. Separating meme topics from discussion topics is the chat admins'
   job. A chat without topics, and a forum's General topic, use
