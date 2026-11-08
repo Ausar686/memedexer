@@ -47,11 +47,10 @@ def test_video_mode_limits_resources_and_writes_framed_jpegs(
         resource.RLIMIT_AS: (decoder.MEMORY_LIMIT_BYTES, decoder.MEMORY_LIMIT_BYTES),
     }
     pictures = [PIL.Image.open(io.BytesIO(frame)) for frame in read_frames(output)]
-    assert [(picture.format, picture.getpixel((5, 5))[:2]) for picture in pictures] == [
-        ("JPEG", (0, 128)),
-        ("JPEG", (254, 0)),
-        ("JPEG", (255, 255)),
-    ]
+    assert [picture.format for picture in pictures] == ["JPEG"] * 3
+    # Green, red and white scenes at 10%, 50% and 90%; JPEG encoders differ by a level or two across platforms.
+    corners = [picture.getpixel((5, 5)) for picture in pictures]
+    assert corners == [pytest.approx(color, abs=6) for color in [(0, 128, 0), (255, 0, 0), (255, 255, 255)]]
 
 
 def test_image_mode_writes_the_fitted_image(monkeypatch: pytest.MonkeyPatch, limits: dict) -> None:
