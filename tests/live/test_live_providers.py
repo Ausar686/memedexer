@@ -23,7 +23,7 @@ async def test_captions_fixture_meme(provider: Provider, model_id: str) -> None:
     spec = get_model_spec(provider, model_id)
 
     result = await build_providers(settings)[provider].caption(
-        Image(FIXTURE.read_bytes(), "image/png"), model=spec, description_language=None
+        [Image(FIXTURE.read_bytes(), "image/png")], model=spec, description_language=None
     )
 
     normalized = " ".join(result.text.upper().split())

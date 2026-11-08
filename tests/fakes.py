@@ -1,3 +1,4 @@
+import collections.abc as cabc
 import pathlib
 
 from memedexer.captioning.base import CaptionResult, Image, Usage
@@ -18,10 +19,12 @@ class FakeProvider:
 
     def __init__(self, *results: CaptionResult | Exception) -> None:
         self.results = list(results)
-        self.calls: list[tuple[Image, ModelSpec, str | None]] = []
+        self.calls: list[tuple[list[Image], ModelSpec, str | None]] = []
 
-    async def caption(self, image: Image, *, model: ModelSpec, description_language: str | None) -> CaptionResult:
-        self.calls.append((image, model, description_language))
+    async def caption(
+        self, images: cabc.Sequence[Image], *, model: ModelSpec, description_language: str | None
+    ) -> CaptionResult:
+        self.calls.append((list(images), model, description_language))
         result = self.results.pop(0) if len(self.results) > 1 else self.results[0]
         if isinstance(result, Exception):
             raise result

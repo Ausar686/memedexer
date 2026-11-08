@@ -176,7 +176,7 @@ class Worker:
 
         try:
             result = await provider.caption(
-                image, model=resolved.model, description_language=resolved.description_language
+                [image], model=resolved.model, description_language=resolved.description_language
             )
         except CaptionError as exc:
             self._charge(job, resolved.model, exc.usage)

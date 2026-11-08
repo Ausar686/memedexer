@@ -31,3 +31,10 @@ def test_unknown_default_model_fails_fast() -> None:
 def test_user_instruction_language() -> None:
     assert user_instruction("Russian").endswith("in Russian.")
     assert "English if it has no text" in user_instruction(None)
+
+
+def test_user_instruction_names_a_video_by_its_frame_count() -> None:
+    assert user_instruction(None).startswith("Caption this image.")
+    assert user_instruction("Russian", frames=3) == (
+        "Caption this video from its 3 frames. Write the description and tags in Russian."
+    )

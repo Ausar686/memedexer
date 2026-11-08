@@ -69,7 +69,7 @@ async def test_captions_and_records_cost(
     assert (done.input_tokens, done.output_tokens, done.cost_microusd) == (1000, 100, 100 + 50)
     assert done.finished_at is not None
     assert downloader.file_ids == ["file-uniq"]
-    image, model, language = provider.calls[0]
+    [image], model, language = provider.calls[0]
     assert (image.media_type, model.id, language) == ("image/png", "claude-haiku-5-5", None)
     assert listener.finished == [(job.id, JobStatus.DONE)]
     async with sessionmaker() as s:
