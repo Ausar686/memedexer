@@ -25,7 +25,8 @@ are built per dispatcher (`build_*_router`) and wired in `app.build_dispatcher`.
 - Photos: the largest size whose longer side fits `pipeline.images.MAX_SIDE`,
   else the smallest. Dedup keys on that size's `file_unique_id`.
 - Documents: `image/jpeg`, `image/png`, `image/webp` up to the Bot API's
-  20 MB download limit, and any `video/*`. Their dimensions are unknown.
+  20 MB download limit, and any `video/*`. Their dimensions are unknown, and
+  the declared type is only a filter: decoding checks the content.
 - Videos and GIFs: the file itself, with its duration and thumbnail; one over
   the download limit is still accepted and captioned from the thumbnail.
   Telegram also sets `document` on GIFs, so `animation` is checked first.

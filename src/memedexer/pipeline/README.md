@@ -1,9 +1,10 @@
 # pipeline
 
 Turns queued jobs into stored captions. [worker.py](worker.py) runs the loop;
-[resolve.py](resolve.py), [budget.py](budget.py) and [images.py](images.py)
-are pure helpers it calls; [video.py](video.py) samples video frames through
-the child process in [frames.py](frames.py).
+[resolve.py](resolve.py) and [budget.py](budget.py) are pure helpers it
+calls; [sandbox.py](sandbox.py) decodes images and videos through the child
+process in [decoder.py](decoder.py), which runs [images.py](images.py) and
+[frames.py](frames.py).
 
 ## Job lifecycle
 ```
@@ -20,16 +21,25 @@ For each claimed job the worker, in order:
 4. **Budget:** marks the job `budget_exceeded` if the chat has reached its
    daily, weekly or monthly limit (UTC calendar periods, ISO weeks).
 5. Fails it if the resolved provider has no API key.
-6. Downloads the file, fits it to provider limits (≤1568 px per side,
-   ≤3.75 MB raw, otherwise re-encoded as JPEG), and calls the provider. A
-   video becomes its sampled frames (see below), all in one call; a video
+6. Downloads the file, fits it to provider limits in the sandbox (see
+   below), and calls the provider. A video becomes its sampled frames, all
+   in one call; a video
    over the Bot API's 20 MB download limit becomes its thumbnail and the job
    is marked `thumbnail_only` (without a thumbnail it fails).
 7. Records usage and `cost_microusd` on the job (also for billed refusals
    and failures), stores the `Caption`, and finishes the job.
 
+## Images
+- Only JPEG, PNG and WebP are opened (`images.FORMATS`), whatever type the
+  sender declared, and the type sent to the provider is the detected one.
+- Images over `images.MAX_PIXELS` (64 MP) are refused before decoding, so a
+  decompression bomb (a few KB that decode to gigabytes) costs nothing.
+- Small ones (≤1568 px per side, ≤3.75 MB) are passed through untouched once
+  their structure checks out; the rest are shrunk (palettes smoothly) and
+  re-encoded as JPEG, flattened onto white.
+
 ## Video frames
-- Positions: `video.FRAME_POSITIONS` (10%, 50%, 90% of the duration). The
+- Positions: `sandbox.FRAME_POSITIONS` (10%, 50%, 90% of the duration). The
   duration comes from the container, else from Telegram; with neither, the
   first frame only. Each frame is the first one shown at or after its
   position, or the last frame when the video ends earlier.
@@ -40,22 +50,26 @@ For each claimed job the worker, in order:
   costs one frame.
 - Inputs that can't seek (raw streams) are read in one forward pass, with
   frame times from the frame rate when frames carry no timestamps.
-- Isolation: decoding untrusted video runs FFmpeg's native code (via PyAV),
-  so it happens in a fresh `python -I -m memedexer.pipeline.frames` process
-  per video, in its own process group, with:
-  - an empty environment (no tokens); the bot process is also non-dumpable
-    (`app.forbid_inspection`), so the child can't read the bot's environment
-    or memory through `/proc` either;
-  - `RLIMIT_AS` 1 GiB (Linux), `RLIMIT_CPU` 10 s, `RLIMIT_FSIZE` 0 (no file
-    writes) and a small `RLIMIT_NOFILE`, plus a 15 s wall-clock timeout;
-  - only the demuxers in `frames.DEMUXERS` (MP4/MOV, Matroska/WebM, AVI,
-    MPEG-TS/PS, FLV, ASF, GIF, raw H.264/HEVC); anything else is refused.
+- Only the demuxers in `frames.DEMUXERS` are opened (MP4/MOV, Matroska/WebM,
+  AVI, MPEG-TS/PS, FLV, ASF, GIF, raw H.264/HEVC).
 
-  The whole group is killed on timeout or when the job is cancelled. The
-  parent reads at most `video.MAX_OUTPUT_BYTES` of output and the tail of
-  stderr; the output is length-framed JPEGs that it checks (count, size)
-  before use. Any failure is a non-retryable `VideoError`. The bot process
-  never imports PyAV.
+## Decoding sandbox
+Pillow and FFmpeg (via PyAV) are native code parsing files anyone in a chat
+can send, so the bot never decodes media itself. Each image or video goes to
+a fresh `python -I -m memedexer.pipeline.decoder image|video` process, in its
+own process group, with:
+- an empty environment (no tokens); the bot process is also non-dumpable
+  (`app.forbid_inspection`), so the child can't read the bot's environment or
+  memory through `/proc` either;
+- `RLIMIT_AS` 1 GiB (Linux), `RLIMIT_CPU` 10 s, `RLIMIT_FSIZE` 0 (no file
+  writes) and a small `RLIMIT_NOFILE`, plus a 15 s wall-clock timeout.
+
+The whole group is killed on timeout or when the job is cancelled. The parent
+reads at most `sandbox.MAX_OUTPUT_BYTES` of output and the tail of stderr;
+the output is length-framed pictures that it checks (count, size, image
+signature) before use. Bad input exits with a one-line reason; any failure is
+a non-retryable `ImageError` or `VideoError`. The image mode doesn't load
+PyAV, and the bot process loads neither.
 
 ## Retries
 - Retryable download or provider errors put the job back to `pending` with
