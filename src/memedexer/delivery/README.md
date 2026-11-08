@@ -15,6 +15,9 @@ helpers.
   back and forth can't make the bot post again and again. Several jobs then
   share one `reply_message_id`. "Message is not modified" counts as done; if
   the old reply is gone or can't be edited, a new reply is posted.
+- A job whose message already has a reply from a newer job (an edit can be
+  captioned before the original) posts nothing and takes that reply's id,
+  so a stale reply with the pre-edit media never appears.
 - Photo, video, GIF: re-sent by `media.reply_file_id` (`sendPhoto`,
   `sendVideo`, `sendAnimation`). Documents can't be re-sent as photos or
   videos by their own id, so they are downloaded and uploaded once (an image

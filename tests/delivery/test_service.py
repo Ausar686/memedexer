@@ -403,6 +403,23 @@ async def test_a_deleted_reply_is_replaced_by_a_new_one(
     assert (await load_job(sessionmaker, job.id)).reply_message_id == 1000
 
 
+async def test_a_job_overtaken_by_a_newer_reply_posts_nothing(
+    delivery: Delivery, telegram: FakeTelegram, session: AsyncSession, sessionmaker: async_sessionmaker
+) -> None:
+    # The original's job finished captioning after its edit's job, which posted a reply already.
+    await seed_chat(session)
+    original = await captioned_job(session, file_unique_id="a", reply_file_id="photo-a")
+    edit = await captioned_job(session, file_unique_id="b", reply_file_id="photo-b")
+    edit.trigger, edit.reply_message_id = JobTrigger.EDIT, 777
+    await session.commit()
+
+    await delivery.deliver(original.id)
+
+    assert telegram.requests == []
+    stored = await load_job(sessionmaker, original.id)
+    assert (stored.reply_message_id, stored.delivery_error) == (777, None)
+
+
 async def test_an_edited_image_document_is_uploaded_into_the_reply(
     delivery: Delivery,
     telegram: FakeTelegram,

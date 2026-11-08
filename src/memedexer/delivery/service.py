@@ -161,9 +161,14 @@ class Delivery:
                 return
             caption = await session.get(Caption, job.caption_id)
             media = await session.get(Media, job.file_unique_id)
-            previous = None
-            if job.trigger is JobTrigger.EDIT:
-                previous = await repo.latest_replied_job(session, job.chat_id, job.message_id, before_job_id=job.id)
+            latest = await repo.latest_replied_job(session, job.chat_id, job.message_id)
+            if latest is not None and latest.id > job.id:
+                # A newer job for the message (an edit can finish captioning first) already shows the current media;
+                # posting this one now would add a stale reply.
+                job.reply_message_id = latest.reply_message_id
+                await session.commit()
+                return
+            previous = latest if job.trigger is JobTrigger.EDIT else None
 
         caption_html = _caption_html(caption, spoiler=job.has_spoiler)
         try:
