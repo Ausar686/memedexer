@@ -21,6 +21,7 @@ from memedexer.storage import db, repo
 from memedexer.storage.models import (
     NO_TOPIC,
     Caption,
+    Chat,
     ChatStatus,
     Job,
     JobStatus,
@@ -721,7 +722,7 @@ async def test_alerts_with_different_errors_are_throttled_together_and_counted(
 ) -> None:
     # Errors can differ for every bad file, so they mustn't make every alert unique.
     now = [0.0]
-    delivery._alerts = Cooldown(ALERT_INTERVAL_SECONDS, lambda: now[0])
+    delivery._alerts = Cooldown(ALERT_INTERVAL_SECONDS, lambda: now[0], count_suppressed=True)
     await seed_chat(session)
     jobs = [await seed_job(session, message_id=i) for i in range(4)]
     for index, job in enumerate(jobs):
@@ -737,6 +738,24 @@ async def test_alerts_with_different_errors_are_throttled_together_and_counted(
     assert "broken file #0" in first.text and "more like this" not in first.text
     assert "broken file #3" in second.text
     assert "(2 more like this in the last hour weren't sent.)" in second.text
+
+
+async def test_renaming_a_chat_does_not_restart_its_alert_interval(
+    delivery: Delivery, telegram: FakeTelegram, session: AsyncSession, sessionmaker: async_sessionmaker
+) -> None:
+    await seed_chat(session)
+    first, second = [await seed_job(session, message_id=i) for i in range(2)]
+    for job in (first, second):
+        repo.finish_job(job, JobStatus.FAILED, error="boom")
+    await session.commit()
+
+    await delivery.job_finished(first)
+    async with sessionmaker() as s:
+        (await s.get(Chat, CHAT_ID)).title = "renamed memes"
+        await s.commit()
+    await delivery.job_finished(second)
+
+    assert len(telegram.calls(SendMessage)) == 1
 
 
 async def test_budget_alert_only_for_first_over_budget_job(

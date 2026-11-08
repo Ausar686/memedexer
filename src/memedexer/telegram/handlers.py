@@ -77,13 +77,15 @@ async def on_edited_media(
 
 async def alert_backlog(chat: Chat, bot: Bot, settings: Settings, backlog_alerts: Cooldown) -> None:
     log.warning("skipping media in chat %d: %d captions are queued", chat.id, MAX_QUEUED_JOBS_PER_CHAT)
-    if backlog_alerts.ready(chat.id):
-        await notify_owner(
-            bot,
-            settings,
-            f"⚠️ {describe_chat(chat)} has {MAX_QUEUED_JOBS_PER_CHAT} captions queued, so new media there is skipped "
-            "until they're done.",
-        )
+    if not backlog_alerts.ready(chat.id):
+        return None
+    text = (
+        f"⚠️ {describe_chat(chat)} has {MAX_QUEUED_JOBS_PER_CHAT} captions queued, so new media there is skipped "
+        "until they're done."
+    )
+    if skipped := backlog_alerts.pop_suppressed(chat.id):
+        text += f" {skipped} more were skipped since the last notice."
+    await notify_owner(bot, settings, text)
     return None
 
 
