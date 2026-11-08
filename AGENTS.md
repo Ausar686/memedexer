@@ -76,7 +76,8 @@ narration, or dated TODOs. Match the comment density of neighboring code.
     model allowlist and prices. **See
     [captioning/AGENTS.md](src/memedexer/captioning/AGENTS.md).**
   - [pipeline/](src/memedexer/pipeline) — job worker: dedup, budgets,
-    retries, image preparation (`README.md`).
+    retries, image preparation, video frame sampling in an isolated child
+    process (`README.md`).
   - [telegram/](src/memedexer/telegram) — aiogram handlers and downloader
     (`README.md`).
   - [delivery/](src/memedexer/delivery) — caption replies, per-chat
