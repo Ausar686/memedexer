@@ -5,6 +5,7 @@ import typing as t
 from aiogram import Bot
 from aiogram.client.session.base import BaseSession
 from aiogram.methods import (
+    EditMessageMedia,
     GetChat,
     GetChatMember,
     GetMe,
@@ -78,6 +79,23 @@ class FakeTelegram(BaseSession):
                     "chat": {"id": method.chat_id, "type": "supergroup"},
                     "caption": method.caption,
                     field: sent,
+                }
+            )
+        if isinstance(method, EditMessageMedia):
+            # The edited message keeps its id; its media gets a new file id, as uploads do.
+            field = method.media.type.value
+            edited = {"file_id": f"edited-{field}-{method.message_id}", "file_unique_id": "e"}
+            if field == "photo":
+                edited = [edited | {"width": 1280, "height": 960}]
+            elif field != "document":
+                edited |= {"width": 1280, "height": 720, "duration": 10}
+            return Message.model_validate(
+                {
+                    "message_id": method.message_id,
+                    "date": 0,
+                    "chat": {"id": method.chat_id, "type": "supergroup"},
+                    "caption": method.media.caption,
+                    field: edited,
                 }
             )
         if isinstance(method, GetChatMember):

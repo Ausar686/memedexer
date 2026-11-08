@@ -1,6 +1,7 @@
 import asyncio
 import datetime as dt
 import decimal
+import typing as t
 
 import pytest
 from aiogram import Bot
@@ -8,7 +9,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError, TelegramRetryAfter
 from aiogram.methods import EditMessageMedia, SendAnimation, SendDocument, SendMessage, SendPhoto, SendVideo
-from aiogram.types import BufferedInputFile, InputMediaPhoto, InputMediaVideo
+from aiogram.types import BufferedInputFile, InputMediaAnimation, InputMediaDocument, InputMediaPhoto, InputMediaVideo
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from memedexer.config import Provider, Settings
@@ -16,7 +17,17 @@ from memedexer.delivery.service import MAX_SEND_ATTEMPTS, Delivery, message_link
 from memedexer.delivery.throttle import Throttle
 from memedexer.pipeline.worker import MAX_DOWNLOAD_BYTES, DownloadError, Worker
 from memedexer.storage import db, repo
-from memedexer.storage.models import NO_TOPIC, Caption, ChatStatus, Job, JobStatus, Media, MediaType, utcnow
+from memedexer.storage.models import (
+    NO_TOPIC,
+    Caption,
+    ChatStatus,
+    Job,
+    JobStatus,
+    JobTrigger,
+    Media,
+    MediaType,
+    utcnow,
+)
 from tests.factories import CHAT_ID, THREAD_ID, seed_chat, seed_job
 from tests.fakes import MEME, FakeDownloader, FakeProvider, caption_result
 from tests.telegram.fake_api import FakeTelegram
@@ -331,6 +342,138 @@ async def test_video_document_is_uploaded_once_as_a_video_then_reused(
     assert downloader.file_ids == ["file-uniq"]
     async with sessionmaker() as s:
         assert (await s.get(Media, "uniq")).reply_file_id == "video-1000"
+
+
+async def replied_and_edited(
+    session: AsyncSession, *, edited_reply_file_id: str | None = "photo-b", **media: t.Any
+) -> Job:
+    """A message whose first image got reply 555, then was edited to other media: the edit's job, undelivered."""
+    first = await captioned_job(session, file_unique_id="a", reply_file_id="photo-a")
+    first.reply_message_id = 555
+    edit = await captioned_job(session, file_unique_id="b", reply_file_id=edited_reply_file_id, **media)
+    edit.trigger = JobTrigger.EDIT
+    await session.commit()
+    return edit
+
+
+async def test_an_edit_replaces_the_reply_in_place(
+    delivery: Delivery, telegram: FakeTelegram, session: AsyncSession, sessionmaker: async_sessionmaker
+) -> None:
+    await seed_chat(session)
+    job = await replied_and_edited(session)
+
+    await delivery.deliver(job.id)
+
+    [edit] = telegram.calls(EditMessageMedia)
+    assert (edit.chat_id, edit.message_id, edit.media.media) == (CHAT_ID, 555, "photo-b")
+    assert edit.media.caption == (
+        "<blockquote expandable>WHEN ALL TESTS PASS</blockquote>\nA smiley face. It smiles.\n#tests"
+    )
+    assert telegram.calls(SendPhoto) == []
+    assert (await load_job(sessionmaker, job.id)).reply_message_id == 555
+
+
+async def test_editing_back_to_the_same_reply_is_not_an_error(
+    delivery: Delivery, telegram: FakeTelegram, session: AsyncSession, sessionmaker: async_sessionmaker
+) -> None:
+    await seed_chat(session)
+    job = await replied_and_edited(session)
+    request = EditMessageMedia(media=InputMediaPhoto(media="x"))
+    telegram.errors[EditMessageMedia] = TelegramBadRequest(request, "Bad Request: message is not modified")
+
+    await delivery.deliver(job.id)
+
+    stored = await load_job(sessionmaker, job.id)
+    assert (stored.reply_message_id, stored.delivery_error) == (555, None)
+    assert telegram.calls(SendPhoto) == []
+
+
+async def test_a_deleted_reply_is_replaced_by_a_new_one(
+    delivery: Delivery, telegram: FakeTelegram, session: AsyncSession, sessionmaker: async_sessionmaker
+) -> None:
+    await seed_chat(session)
+    job = await replied_and_edited(session)
+    request = EditMessageMedia(media=InputMediaPhoto(media="x"))
+    telegram.errors[EditMessageMedia] = TelegramBadRequest(request, "Bad Request: message to edit not found")
+
+    await delivery.deliver(job.id)
+
+    [sent] = telegram.calls(SendPhoto)
+    assert sent.photo == "photo-b"
+    assert (await load_job(sessionmaker, job.id)).reply_message_id == 1000
+
+
+async def test_an_edited_image_document_is_uploaded_into_the_reply(
+    delivery: Delivery,
+    telegram: FakeTelegram,
+    downloader: FakeDownloader,
+    session: AsyncSession,
+    sessionmaker: async_sessionmaker,
+) -> None:
+    await seed_chat(session)
+    job = await replied_and_edited(session, edited_reply_file_id=None)
+
+    await delivery.deliver(job.id)
+
+    [edit] = telegram.calls(EditMessageMedia)
+    assert isinstance(edit.media.media, BufferedInputFile)
+    assert downloader.file_ids == ["file-b"]
+    async with sessionmaker() as s:
+        assert (await s.get(Media, "b")).reply_file_id == "edited-photo-555"
+
+
+@pytest.mark.parametrize(
+    ("media", "input_media", "file"),
+    [
+        ({"media_type": MediaType.ANIMATION, "edited_reply_file_id": "gif-b"}, InputMediaAnimation, "gif-b"),
+        ({"media_type": MediaType.VIDEO, "edited_reply_file_id": "video-b"}, InputMediaVideo, "video-b"),
+        (
+            {"media_type": MediaType.VIDEO_DOCUMENT, "edited_reply_file_id": None, "file_size": MAX_DOWNLOAD_BYTES + 1},
+            InputMediaDocument,
+            "file-b",
+        ),
+    ],
+    ids=["gif", "video", "video-document-too-big"],
+)
+async def test_an_edit_to_other_media_types_replaces_the_reply_with_their_kind(
+    delivery: Delivery, telegram: FakeTelegram, session: AsyncSession, media: dict, input_media: type, file: str
+) -> None:
+    await seed_chat(session)
+    job = await replied_and_edited(session, **media)
+
+    await delivery.deliver(job.id)
+
+    [edit] = telegram.calls(EditMessageMedia)
+    assert (type(edit.media), edit.media.media, edit.message_id) == (input_media, file, 555)
+
+
+@pytest.mark.parametrize("trigger", [JobTrigger.MESSAGE, JobTrigger.RECAPTION])
+async def test_only_edits_replace_replies(
+    delivery: Delivery, telegram: FakeTelegram, session: AsyncSession, trigger: JobTrigger
+) -> None:
+    await seed_chat(session)
+    job = await replied_and_edited(session)
+    job.trigger = trigger
+    await session.commit()
+
+    await delivery.deliver(job.id)
+
+    assert telegram.calls(EditMessageMedia) == []
+    assert len(telegram.calls(SendPhoto)) == 1
+
+
+async def test_hiding_a_reply_shared_by_edits_shows_the_latest_media_once(
+    delivery: Delivery, telegram: FakeTelegram, session: AsyncSession
+) -> None:
+    await seed_chat(session)
+    job = await replied_and_edited(session)
+    job.reply_message_id = 555
+    await session.commit()
+
+    await delivery.hide_replies(CHAT_ID, 100)
+
+    [hide] = telegram.calls(EditMessageMedia)
+    assert (hide.message_id, hide.media.media, hide.media.has_spoiler) == (555, "photo-b", True)
 
 
 async def test_video_document_too_big_to_upload_goes_back_as_a_document(

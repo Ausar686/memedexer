@@ -206,6 +206,22 @@ async def latest_job_for_message(session: AsyncSession, chat_id: int, message_id
     return await session.scalar(query)
 
 
+async def latest_replied_job(session: AsyncSession, chat_id: int, message_id: int, *, before_job_id: int) -> Job | None:
+    """The message's latest job, older than `before_job_id`, whose reply was posted."""
+    query = (
+        sa.select(Job)
+        .where(
+            Job.chat_id == chat_id,
+            Job.message_id == message_id,
+            Job.id < before_job_id,
+            Job.reply_message_id.is_not(None),
+        )
+        .order_by(Job.id.desc())
+        .limit(1)
+    )
+    return await session.scalar(query)
+
+
 async def jobs_for_message(session: AsyncSession, chat_id: int, message_id: int) -> list[Job]:
     query = sa.select(Job).where(Job.chat_id == chat_id, Job.message_id == message_id).order_by(Job.id)
     return list(await session.scalars(query))
