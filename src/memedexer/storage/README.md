@@ -9,7 +9,7 @@ migrations in [db.py](db.py).
 | --- | --- | --- |
 | `chats` | Telegram chat id | title, forum flag, approval `status`, who added the bot, chat-level `provider`/`model`/`description_language` overrides |
 | `topics` | (`chat_id`, `thread_id`) | `captioning_enabled` and topic-level `provider`/`model` overrides |
-| `media` | `file_unique_id` | latest `file_id`, `media_type` (`photo`, `image_document`, `video`, `video_document`, `animation`), `mime_type`, dimensions (unknown for documents), `duration`, Telegram's `thumbnail_file_id`, and `reply_file_id` (what the reply's send method accepts: set at ingestion for photos, videos and GIFs, and after the first reply for documents); the files themselves are never stored |
+| `media` | `file_unique_id` | latest `file_id`, `media_type` (`photo`, `image_document`, `video`, `video_document`, `animation`), `mime_type`, dimensions (unknown for documents), `duration`, Telegram's `thumbnail_file_id`, and `reply_file_id` (what the reply's send method accepts: set at ingestion for photos, videos and GIFs, and after the first reply for documents; reset when the same file arrives as another kind); the files themselves are never stored |
 | `captions` | id | one row per captioning run: provider, model, `text`, `description`, `tags`, `languages`, `kind` |
 | `jobs` | id | one row per captioning request: source message (and whether its media is a spoiler, `has_spoiler`), `trigger`, `status`, attempts, error, resulting caption, whether it was captioned from a too-big video's thumbnail (`thumbnail_only`), posted `reply_message_id` or `delivery_error`, token usage, `cost_microusd`, and `available_at` (when a retried job may be claimed again) |
 
