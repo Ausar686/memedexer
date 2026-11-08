@@ -37,6 +37,7 @@ def build_dispatcher(**context: object) -> Dispatcher:
         approval_requests=Cooldown(APPROVAL_REQUEST_INTERVAL_SECONDS),
         approval_notices=Cooldown(NOT_APPROVED_NOTICE_INTERVAL_SECONDS),
         backlog_alerts=Cooldown(BACKLOG_ALERT_INTERVAL_SECONDS, count_suppressed=True),
+        enqueue_lock=asyncio.Lock(),
     )
     dispatcher.include_routers(build_membership_router(), build_admin_router(), build_router())
     for key, value in context.items():

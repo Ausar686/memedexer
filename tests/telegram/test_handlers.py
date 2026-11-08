@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 import sqlalchemy as sa
 from aiogram import Bot, Dispatcher
@@ -271,3 +273,17 @@ async def test_finished_jobs_do_not_count_toward_the_queue(
     await dispatcher.feed_update(bot, update(message_id=500, photo=PHOTO_SIZES))
 
     assert len(await jobs(sessionmaker)) == MAX_QUEUED_JOBS_PER_CHAT + 1
+
+
+async def test_a_burst_cannot_overrun_the_queue_cap(
+    dispatcher: Dispatcher, bot: Bot, session: AsyncSession, sessionmaker: async_sessionmaker
+) -> None:
+    # Updates are handled concurrently; each must see the jobs the others enqueued.
+    await seed_chat(session)
+    for message_id in range(MAX_QUEUED_JOBS_PER_CHAT - 2):
+        await seed_job(session, message_id=message_id)
+
+    burst = [update(update_id, message_id=500 + update_id, photo=PHOTO_SIZES) for update_id in range(1, 9)]
+    await asyncio.gather(*(dispatcher.feed_update(bot, item) for item in burst))
+
+    assert len(await jobs(sessionmaker)) == MAX_QUEUED_JOBS_PER_CHAT
