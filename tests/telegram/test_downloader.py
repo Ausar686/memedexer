@@ -2,14 +2,20 @@ import typing as t
 
 import aiohttp
 import pytest
+import yarl
 from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
 from aiogram.methods import GetFile
 
 from memedexer.pipeline.worker import DownloadError
 from memedexer.telegram.downloader import DOWNLOAD_TIMEOUT_SECONDS, BotDownloader
 
+TOKEN = "123:SECRET"
+FILE_URL = f"https://api.telegram.org/file/bot{TOKEN}/videos/file_1.mp4"
+
 
 class FakeBot:
+    token = TOKEN
+
     def __init__(self, result: bytes | Exception) -> None:
         self.result = result
         self.timeouts: list[int] = []
@@ -41,3 +47,17 @@ async def test_errors_are_classified(error: Exception, retryable: bool) -> None:
     with pytest.raises(DownloadError) as excinfo:
         await BotDownloader(FakeBot(error)).download("f")
     assert excinfo.value.retryable is retryable
+
+
+async def test_http_errors_do_not_leak_the_token_in_the_file_url() -> None:
+    url = yarl.URL(FILE_URL)
+    error = aiohttp.ClientResponseError(
+        aiohttp.RequestInfo(url, "GET", {}, url), (), status=502, message="Bad Gateway"
+    )
+
+    with pytest.raises(DownloadError) as excinfo:
+        await BotDownloader(FakeBot(error)).download("f")
+
+    assert str(excinfo.value) == (
+        "download failed: 502, message='Bad Gateway', url='https://api.telegram.org/file/bot<redacted>/videos/file_1.mp4'"
+    )

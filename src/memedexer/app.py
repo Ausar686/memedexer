@@ -8,6 +8,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
+from memedexer import redaction
 from memedexer.captioning.registry import build_providers
 from memedexer.config import Settings
 from memedexer.delivery.service import Delivery
@@ -93,4 +94,5 @@ async def finish(task: asyncio.Task, timeout: float) -> None:
 def main() -> None:
     settings = Settings()
     logging.basicConfig(level=settings.log_level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    redaction.install(settings.secret_values)
     asyncio.run(run(settings))
