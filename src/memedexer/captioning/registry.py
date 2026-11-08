@@ -9,6 +9,11 @@ from memedexer.captioning.providers.anthropic import AnthropicProvider
 from memedexer.captioning.providers.openai import OpenAIProvider
 from memedexer.config import Provider, Settings
 
+# A caption takes seconds; the SDKs' 10-minute default would let one stalled call hold a worker that long.
+REQUEST_TIMEOUT_SECONDS = 90.0
+# The worker retries on its own schedule and counts each attempt; SDK retries would multiply calls unseen.
+SDK_MAX_RETRIES = 0
+
 
 def build_providers(settings: Settings) -> dict[Provider, CaptionProvider]:
     """Fails fast if the default model isn't allowlisted, so a typo surfaces at startup, not per job."""
@@ -18,7 +23,11 @@ def build_providers(settings: Settings) -> dict[Provider, CaptionProvider]:
         key = settings.api_key(provider).get_secret_value()
         match provider:
             case Provider.ANTHROPIC:
-                providers[provider] = AnthropicProvider(anthropic.AsyncAnthropic(api_key=key))
+                client = anthropic.AsyncAnthropic(
+                    api_key=key, timeout=REQUEST_TIMEOUT_SECONDS, max_retries=SDK_MAX_RETRIES
+                )
+                providers[provider] = AnthropicProvider(client)
             case Provider.OPENAI:
-                providers[provider] = OpenAIProvider(openai.AsyncOpenAI(api_key=key))
+                client = openai.AsyncOpenAI(api_key=key, timeout=REQUEST_TIMEOUT_SECONDS, max_retries=SDK_MAX_RETRIES)
+                providers[provider] = OpenAIProvider(client)
     return providers
