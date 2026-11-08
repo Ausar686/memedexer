@@ -15,6 +15,7 @@ MAX_TAGS = 4
 # and posted; a real caption stays well within them.
 MAX_TEXT_CHARS = 4000
 MAX_DESCRIPTION_CHARS = 500
+# Of a tag's text after the `#`.
 MAX_TAG_CHARS = 64
 MAX_LANGUAGES = 5
 CaptionKind = t.Literal["meme", "screenshot", "photo", "other"]
@@ -97,7 +98,10 @@ def clean_text(raw: str, limit: int) -> str:
 
 
 def normalize_tag(raw: str) -> str | None:
-    """Make a Telegram hashtag: word characters only, words joined by `_`, not all digits, at most `MAX_TAG_CHARS`."""
+    """Make a Telegram hashtag: word characters only, words joined by `_`, not all digits.
+
+    The part after `#` is at most `MAX_TAG_CHARS` long.
+    """
     body = _NON_TAG_CHARS.sub("_", raw.strip().lstrip("#")).strip("_")[:MAX_TAG_CHARS].rstrip("_")
     if not body or body.replace("_", "").isdigit():
         return None

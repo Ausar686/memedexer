@@ -17,8 +17,8 @@ through a third-party model API.
     deduplicated, at most `MAX_LANGUAGES`; anything else is dropped.
   - `text` and `description` lose control characters (except line breaks
     and tabs) and bidirectional overrides, and are capped at
-    `MAX_TEXT_CHARS` / `MAX_DESCRIPTION_CHARS` with `…`; tags at
-    `MAX_TAG_CHARS`. Text on an image can steer the model, so its output is
+    `MAX_TEXT_CHARS` / `MAX_DESCRIPTION_CHARS` with `…`; a tag's text after
+    the `#` at `MAX_TAG_CHARS`. Text on an image can steer the model, so its output is
     treated as untrusted.
 - Failures raise `CaptionError(retryable=...)`; `CaptionRefused` is a
   non-retryable subclass. Both carry `usage` when the provider billed the
