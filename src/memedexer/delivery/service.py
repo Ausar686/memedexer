@@ -14,7 +14,9 @@ from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramFor
 from aiogram.types import (
     BufferedInputFile,
     InputFile,
+    InputMedia,
     InputMediaAnimation,
+    InputMediaDocument,
     InputMediaPhoto,
     InputMediaVideo,
     Message,
@@ -29,7 +31,18 @@ from memedexer.pipeline import budget
 from memedexer.pipeline.images import ImageError, prepare_image
 from memedexer.pipeline.worker import Downloader, DownloadError, over_download_limit
 from memedexer.storage import repo
-from memedexer.storage.models import NO_TOPIC, Caption, Chat, ChatStatus, Job, JobStatus, Media, MediaType, utcnow
+from memedexer.storage.models import (
+    NO_TOPIC,
+    Caption,
+    Chat,
+    ChatStatus,
+    Job,
+    JobStatus,
+    JobTrigger,
+    Media,
+    MediaType,
+    utcnow,
+)
 from memedexer.telegram.membership import describe_chat, notify_owner
 
 log = logging.getLogger(__name__)
@@ -148,9 +161,18 @@ class Delivery:
                 return
             caption = await session.get(Caption, job.caption_id)
             media = await session.get(Media, job.file_unique_id)
+            latest = await repo.latest_replied_job(session, job.chat_id, job.message_id)
+            if latest is not None and latest.id > job.id:
+                # A newer job for the message (an edit can finish captioning first) already shows the current media;
+                # posting this one now would add a stale reply.
+                job.reply_message_id = latest.reply_message_id
+                await session.commit()
+                return
+            previous = latest if job.trigger is JobTrigger.EDIT else None
 
+        caption_html = _caption_html(caption, spoiler=job.has_spoiler)
         try:
-            reply = await self._send(job, media, _caption_html(caption, spoiler=job.has_spoiler))
+            reply_message_id, sent = await self._post(job, media, caption_html, previous)
         except DeliveryFailed as exc:
             async with self._sessionmaker() as session:
                 stored = await session.get(Job, job_id)
@@ -163,10 +185,10 @@ class Delivery:
 
         async with self._sessionmaker() as session:
             stored = await session.get(Job, job_id)
-            stored.reply_message_id = reply.message_id
+            stored.reply_message_id = reply_message_id
             stored_media = await session.get(Media, media.file_unique_id)
-            if stored_media.reply_file_id is None:
-                stored_media.reply_file_id = _reply_file_id(media.media_type, reply)
+            if stored_media.reply_file_id is None and sent is not None:
+                stored_media.reply_file_id = _reply_file_id(media.media_type, sent)
             await session.commit()
             # Re-read after the commit: the source may have become a spoiler while this reply was being sent, too
             # late for hide_replies to see the reply.
@@ -182,9 +204,10 @@ class Delivery:
             for job in exposed:
                 job.has_spoiler = True
             await session.commit()
-        for job in exposed:
-            if job.reply_message_id is not None:
-                await self._hide(job.id)
+        # Edits replace a reply in place, so several jobs can share one; it shows the latest job's media.
+        latest = {job.reply_message_id: job for job in exposed if job.reply_message_id is not None}
+        for job in latest.values():
+            await self._hide(job.id)
         return None
 
     async def _hide(self, job_id: int) -> None:
@@ -193,31 +216,14 @@ class Delivery:
             chat = await session.get(Chat, job.chat_id)
             caption = await session.get(Caption, job.caption_id)
             media = await session.get(Media, job.file_unique_id)
-        if media.reply_file_id is None:
-            # The reply went back as a document (a video too big to re-upload), and documents can't be blurred.
+        if _goes_back_as_document(media):
             log.warning("reply of job %d is a document and can't be hidden", job_id)
             return None
 
-        input_media = {
-            MediaType.PHOTO: InputMediaPhoto,
-            MediaType.IMAGE_DOCUMENT: InputMediaPhoto,
-            MediaType.VIDEO: InputMediaVideo,
-            MediaType.VIDEO_DOCUMENT: InputMediaVideo,
-            MediaType.ANIMATION: InputMediaAnimation,
-        }[media.media_type]
-
         async def edit() -> object:
+            input_media = await self._input_media(job, media, _caption_html(caption, spoiler=True), spoiler=True)
             await self._throttle.wait(job.chat_id)
-            return await self._bot.edit_message_media(
-                input_media(
-                    media=media.reply_file_id,
-                    caption=_caption_html(caption, spoiler=True),
-                    parse_mode=ParseMode.HTML,
-                    has_spoiler=True,
-                ),
-                chat_id=job.chat_id,
-                message_id=job.reply_message_id,
-            )
+            return await self._bot.edit_message_media(input_media, chat_id=job.chat_id, message_id=job.reply_message_id)
 
         try:
             await self._with_retries(edit)
@@ -226,6 +232,54 @@ class Delivery:
             if exc.alert:
                 await self._notify(chat, job, f"⚠️ Couldn't hide a spoiler reply in {describe_chat(chat)}", str(exc))
         return None
+
+    async def _post(self, job: Job, media: Media, caption: str, previous: Job | None) -> tuple[int, Message | None]:
+        """Replace `previous`'s reply in place when there is one, else post a new reply.
+
+        Returns the reply's message id, and the message as Telegram returned it (`None` when it was already as wanted).
+        """
+        if previous is not None:
+            try:
+                edited = await self._replace(job, media, caption, previous.reply_message_id)
+            except DeliveryFailed as exc:
+                if exc.alert:
+                    raise
+                # The old reply was deleted, or can't be edited any more.
+                log.info("reply %d can't be edited (%s); posting a new one", previous.reply_message_id, exc)
+            else:
+                return previous.reply_message_id, edited
+        reply = await self._send(job, media, caption)
+        return reply.message_id, reply
+
+    async def _replace(self, job: Job, media: Media, caption: str, message_id: int) -> Message | None:
+        async def edit() -> Message | None:
+            input_media = await self._input_media(job, media, caption, spoiler=job.has_spoiler)
+            await self._throttle.wait(job.chat_id)
+            try:
+                edited = await self._bot.edit_message_media(input_media, chat_id=job.chat_id, message_id=message_id)
+            except TelegramBadRequest as exc:
+                # Edited back to a file whose caption the reply already shows.
+                if "message is not modified" in exc.message:
+                    return None
+                raise
+            return edited if isinstance(edited, Message) else None
+
+        return await self._with_retries(edit)
+
+    async def _input_media(self, job: Job, media: Media, caption: str, *, spoiler: bool) -> InputMedia:
+        """The media `_send` would post, for editing it into an existing reply."""
+        common: dict[str, t.Any] = {"caption": caption, "parse_mode": ParseMode.HTML}
+        match media.media_type:
+            case MediaType.PHOTO | MediaType.IMAGE_DOCUMENT:
+                photo = media.reply_file_id or await self._upload_image(media)
+                return InputMediaPhoto(media=photo, has_spoiler=spoiler, **common)
+            case MediaType.ANIMATION:
+                return InputMediaAnimation(media=media.reply_file_id, has_spoiler=spoiler, **common)
+            case MediaType.VIDEO_DOCUMENT if _goes_back_as_document(media):
+                return InputMediaDocument(media=media.file_id, **common)
+            case MediaType.VIDEO | MediaType.VIDEO_DOCUMENT:
+                video = media.reply_file_id or await self._upload_video(media)
+                return InputMediaVideo(media=video, has_spoiler=spoiler, **common)
 
     async def _send(self, job: Job, media: Media, caption: str) -> Message:
         reply: dict[str, t.Any] = {
@@ -248,8 +302,7 @@ class Delivery:
                     return await self._bot.send_animation(
                         animation=media.reply_file_id, has_spoiler=job.has_spoiler, **reply
                     )
-                case MediaType.VIDEO_DOCUMENT if media.reply_file_id is None and over_download_limit(media.file_size):
-                    # Too big to download and re-upload as a video, so it goes back as the file it came as.
+                case MediaType.VIDEO_DOCUMENT if _goes_back_as_document(media):
                     await self._throttle.wait(job.chat_id)
                     return await self._bot.send_document(document=media.file_id, **reply)
                 case MediaType.VIDEO | MediaType.VIDEO_DOCUMENT:
@@ -343,6 +396,15 @@ class Delivery:
 
 def _caption_html(caption: Caption, *, spoiler: bool) -> str:
     return format_caption(caption.text, caption.description, caption.tags, spoiler=spoiler)
+
+
+def _goes_back_as_document(media: Media) -> bool:
+    """A video document too big to download and re-upload as a video goes back as the file it came as."""
+    return (
+        media.media_type is MediaType.VIDEO_DOCUMENT
+        and media.reply_file_id is None
+        and over_download_limit(media.file_size)
+    )
 
 
 def _reply_file_id(media_type: MediaType, reply: Message) -> str | None:

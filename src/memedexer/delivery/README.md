@@ -9,7 +9,15 @@ helpers.
 - Every `done` job gets a silent reply to its source message, in the same
   topic. The message holds the same media and the formatted caption, and
   never posts if the original is gone (`allow_sending_without_reply=False`).
-  - This covers new posts, edits, `/recaption` and deduplicated reposts.
+  - This covers new posts, `/recaption` and deduplicated reposts.
+- An `edit` job (the source message's media was replaced) edits the reply
+  already posted for that message in place (`editMessageMedia`), so editing
+  back and forth can't make the bot post again and again. Several jobs then
+  share one `reply_message_id`. "Message is not modified" counts as done; if
+  the old reply is gone or can't be edited, a new reply is posted.
+- A job whose message already has a reply from a newer job (an edit can be
+  captioned before the original) posts nothing and takes that reply's id,
+  so a stale reply with the pre-edit media never appears.
 - Photo, video, GIF: re-sent by `media.reply_file_id` (`sendPhoto`,
   `sendVideo`, `sendAnimation`). Documents can't be re-sent as photos or
   videos by their own id, so they are downloaded and uploaded once (an image
@@ -20,10 +28,11 @@ helpers.
   part is wrapped in `<tg-spoiler>` (the markup doesn't count towards the
   limit below). `hide_replies(chat_id, message_id)` handles a source that
   became a spoiler after it was captioned: it flags the message's jobs and
-  edits the replies already posted (`editMessageMedia`). A reply that was
-  being sent at that moment is blurred right after it posts. The edit uses
-  the input media type matching the reply (photo, video or GIF); a reply
-  that went back as a document can't be blurred and is skipped.
+  edits the replies already posted (`editMessageMedia`), each once, with the
+  media of its latest job. A reply that was being sent at that moment is
+  blurred right after it posts. The edit uses the input media type matching
+  the reply (photo, video or GIF); a reply that went back as a document
+  can't be blurred and is skipped.
 - Caption layout (HTML): OCR text in an expandable quote, the description,
   then the hashtags. It must fit Telegram's 1024-character photo caption limit, which
   counts the visible text in UTF-16 units. Tags are always kept; over the

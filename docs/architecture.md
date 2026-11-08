@@ -73,10 +73,12 @@ update (photo / video / GIF / image or video document) in an approved chat
 - **Spoilers:** a reply to media sent as a spoiler is a spoiler too: the
   media is blurred and the OCR text, description and tags are hidden, since
   they give it away just as much.
-- **Edits:** when an edit replaces the media, the new media is captioned and a
-  new reply posted; the previous reply stays. Edits that keep the file are
-  ignored, except one that adds a spoiler: the replies already posted are
-  blurred. Removing a spoiler leaves the replies hidden.
+- **Edits:** when an edit replaces the media, the new media is captioned and
+  the existing reply is edited to show it with the new caption (a new reply
+  only if the old one is gone), so edits can't make the bot spam the chat.
+  Edits that keep the file are ignored, except one that adds a spoiler: the
+  replies already posted are blurred. Removing a spoiler leaves the replies
+  hidden.
 - **Rate limits:** replies go through a per-chat send queue, since Telegram
   allows bots about 20 messages per minute per group.
 - **Budgets:** per-chat spend limits from `.env` (defaults: $20 daily, $100
