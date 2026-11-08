@@ -3,7 +3,7 @@
 import datetime as dt
 
 import sqlalchemy as sa
-import sqlalchemy.orm
+from sqlalchemy import orm
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from memedexer.storage.models import (
@@ -154,7 +154,7 @@ async def claim_next_job(session: AsyncSession, now: dt.datetime | None = None) 
     others, yet a lone busy chat still gets every worker.
     """
     now = now or utcnow()
-    running = sa.orm.aliased(Job)
+    running = orm.aliased(Job)
     running_in_chat = (
         sa.select(sa.func.count())
         .where(running.chat_id == Job.chat_id, running.status == JobStatus.RUNNING)
