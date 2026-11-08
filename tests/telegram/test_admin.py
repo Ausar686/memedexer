@@ -3,6 +3,7 @@ import datetime as dt
 import pytest
 import sqlalchemy as sa
 from aiogram import Bot, Dispatcher
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.methods import GetChatMember
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -10,7 +11,7 @@ from memedexer.config import Settings
 from memedexer.cooldown import Cooldown
 from memedexer.storage import repo
 from memedexer.storage.models import DESCRIPTION_LANGUAGE_MAX_LENGTH, NO_TOPIC, Chat, ChatStatus, Job, JobTrigger, Topic
-from memedexer.telegram.admin import NOT_APPROVED, NOT_APPROVED_NOTICE_INTERVAL_SECONDS
+from memedexer.telegram.admin import ADMINS_ONLY, NOT_APPROVED, NOT_APPROVED_NOTICE_INTERVAL_SECONDS
 from tests.factories import CHAT_ID, THREAD_ID, seed_chat, seed_job
 from tests.telegram.conftest import SpyWorker
 from tests.telegram.fake_api import FakeTelegram
@@ -199,6 +200,19 @@ async def test_unapproved_chat_notice_repeats_after_the_interval(
     await command(dispatcher, bot, "/settings")
 
     assert telegram.sent_texts(CHAT_ID) == [NOT_APPROVED] * 2
+
+
+async def test_failed_admin_lookup_counts_as_not_an_admin(
+    dispatcher: Dispatcher, bot: Bot, telegram: FakeTelegram, session: AsyncSession, sessionmaker: async_sessionmaker
+) -> None:
+    await seed_chat(session, enabled=False)
+    request = GetChatMember(chat_id=CHAT_ID, user_id=MEMBER)
+    telegram.errors[GetChatMember] = TelegramBadRequest(request, "member list is inaccessible")
+
+    await command(dispatcher, bot, "/captions on", user_id=MEMBER)
+
+    assert telegram.sent_texts(CHAT_ID) == [ADMINS_ONLY]
+    assert (await load(sessionmaker, Topic, (CHAT_ID, THREAD_ID))).captioning_enabled is False
 
 
 async def test_recaption_enqueues_job_for_replied_image(

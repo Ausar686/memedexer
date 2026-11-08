@@ -2,11 +2,13 @@
 
 import collections.abc as cabc
 import html
+import logging
 import re
 import typing as t
 
 from aiogram import Bot, F, Router
 from aiogram.enums import ChatMemberStatus
+from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command, CommandObject
 from aiogram.types import Message
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -20,6 +22,8 @@ from memedexer.storage import repo
 from memedexer.storage.models import DESCRIPTION_LANGUAGE_MAX_LENGTH, Chat, ChatStatus, JobTrigger, Topic, utcnow
 from memedexer.telegram.handlers import Notifier
 from memedexer.telegram.media import extract_media, save_media, topic_id
+
+log = logging.getLogger(__name__)
 
 _in_group = F.chat.type.in_({"group", "supergroup"})
 _LANGUAGE = re.compile(rf"^[^\W\d_][\w\s()-]{{0,{DESCRIPTION_LANGUAGE_MAX_LENGTH - 1}}}$")
@@ -67,7 +71,11 @@ async def is_chat_admin(bot: Bot, message: Message, settings: Settings) -> bool:
         return False
     if message.from_user.id == settings.owner_user_id:
         return True
-    member = await bot.get_chat_member(message.chat.id, message.from_user.id)
+    try:
+        member = await bot.get_chat_member(message.chat.id, message.from_user.id)
+    except TelegramAPIError as exc:
+        log.warning("can't check if user %d is an admin in chat %d: %s", message.from_user.id, message.chat.id, exc)
+        return False
     return member.status in (ChatMemberStatus.CREATOR, ChatMemberStatus.ADMINISTRATOR)
 
 
