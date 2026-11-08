@@ -3,18 +3,26 @@
 import logging
 import typing as t
 
-from aiogram import F, Router
+from aiogram import Bot, F, Router
 from aiogram.types import Message
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from memedexer.config import Settings
+from memedexer.cooldown import Cooldown
 from memedexer.storage import repo
-from memedexer.storage.models import ChatStatus, JobTrigger, Topic
+from memedexer.storage.models import Chat, ChatStatus, JobTrigger, Topic
 from memedexer.telegram.media import extract_media, save_media, topic_id
+from memedexer.telegram.membership import describe_chat, notify_owner
 
 log = logging.getLogger(__name__)
 
 _in_group = F.chat.type.in_({"group", "supergroup"})
 _has_media = F.photo | F.document | F.video | F.animation
+
+# Past this many waiting or running captions, a chat's new media is skipped until the queue drains, so one chat can't
+# pile up unbounded work (and spend) faster than it's captioned.
+MAX_QUEUED_JOBS_PER_CHAT = 50
+BACKLOG_ALERT_INTERVAL_SECONDS = 60 * 60
 
 
 class Notifier(t.Protocol):
@@ -25,6 +33,12 @@ class ReplyHider(t.Protocol):
     async def hide_replies(self, chat_id: int, message_id: int) -> None: ...
 
 
+class BacklogFull(Exception):
+    def __init__(self, chat: Chat) -> None:
+        super().__init__(f"chat {chat.id} has {MAX_QUEUED_JOBS_PER_CHAT} captions queued")
+        self.chat = chat
+
+
 def build_router() -> Router:
     router = Router(name="ingestion")
     router.message.register(on_media, _in_group, _has_media)
@@ -32,14 +46,45 @@ def build_router() -> Router:
     return router
 
 
-async def on_media(message: Message, sessionmaker: async_sessionmaker[AsyncSession], worker: Notifier) -> None:
-    await ingest(message, JobTrigger.MESSAGE, sessionmaker, worker)
+async def on_media(
+    message: Message,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    worker: Notifier,
+    bot: Bot,
+    settings: Settings,
+    backlog_alerts: Cooldown,
+) -> None:
+    try:
+        await ingest(message, JobTrigger.MESSAGE, sessionmaker, worker)
+    except BacklogFull as full:
+        await alert_backlog(full.chat, bot, settings, backlog_alerts)
 
 
 async def on_edited_media(
-    message: Message, sessionmaker: async_sessionmaker[AsyncSession], worker: Notifier, delivery: ReplyHider
+    message: Message,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    worker: Notifier,
+    delivery: ReplyHider,
+    bot: Bot,
+    settings: Settings,
+    backlog_alerts: Cooldown,
 ) -> None:
-    await ingest(message, JobTrigger.EDIT, sessionmaker, worker, delivery)
+    try:
+        await ingest(message, JobTrigger.EDIT, sessionmaker, worker, delivery)
+    except BacklogFull as full:
+        await alert_backlog(full.chat, bot, settings, backlog_alerts)
+
+
+async def alert_backlog(chat: Chat, bot: Bot, settings: Settings, backlog_alerts: Cooldown) -> None:
+    log.warning("skipping media in chat %d: %d captions are queued", chat.id, MAX_QUEUED_JOBS_PER_CHAT)
+    if backlog_alerts.ready(chat.id):
+        await notify_owner(
+            bot,
+            settings,
+            f"⚠️ {describe_chat(chat)} has {MAX_QUEUED_JOBS_PER_CHAT} captions queued, so new media there is skipped "
+            "until they're done.",
+        )
+    return None
 
 
 async def ingest(
@@ -51,7 +96,8 @@ async def ingest(
 ) -> bool:
     """Enqueue a job if the chat is approved and the topic has captioning on; True when one was enqueued.
 
-    An edit that keeps the file but adds a spoiler hides the replies already posted instead.
+    An edit that keeps the file but adds a spoiler hides the replies already posted instead. Raises `BacklogFull` when
+    the chat has `MAX_QUEUED_JOBS_PER_CHAT` jobs queued.
     """
     media = extract_media(message)
     if media is None:
@@ -71,6 +117,8 @@ async def ingest(
                 if message.has_media_spoiler and delivery is not None:
                     await delivery.hide_replies(chat.id, message.message_id)
                 return False
+        if await repo.count_queued_jobs(session, chat.id) >= MAX_QUEUED_JOBS_PER_CHAT:
+            raise BacklogFull(chat)
         await save_media(session, media)
         job = await repo.enqueue_job(
             session,

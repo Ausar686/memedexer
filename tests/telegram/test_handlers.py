@@ -1,11 +1,14 @@
 import pytest
 import sqlalchemy as sa
 from aiogram import Bot, Dispatcher
+from aiogram.methods import SendMessage
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from memedexer.storage.models import NO_TOPIC, ChatStatus, Job, JobTrigger, Media, MediaType
-from tests.factories import CHAT_ID, THREAD_ID, seed_chat
+from memedexer.storage.models import NO_TOPIC, ChatStatus, Job, JobStatus, JobTrigger, Media, MediaType
+from memedexer.telegram.handlers import MAX_QUEUED_JOBS_PER_CHAT
+from tests.factories import CHAT_ID, THREAD_ID, seed_chat, seed_job
 from tests.telegram.conftest import SpyReplies, SpyWorker
+from tests.telegram.fake_api import FakeTelegram
 from tests.telegram.updates import PHOTO_SIZES, animation, document, update, video
 
 
@@ -222,3 +225,41 @@ async def test_edit_of_uncaptioned_message_is_enqueued(
 
     [job] = await jobs(sessionmaker)
     assert job.trigger is JobTrigger.EDIT
+
+
+async def test_full_queue_skips_new_media_and_tells_the_owner_once(
+    dispatcher: Dispatcher,
+    bot: Bot,
+    telegram: FakeTelegram,
+    session: AsyncSession,
+    sessionmaker: async_sessionmaker,
+    worker: SpyWorker,
+) -> None:
+    await seed_chat(session)
+    for message_id in range(MAX_QUEUED_JOBS_PER_CHAT):
+        job = await seed_job(session, message_id=message_id)
+        job.status = JobStatus.RUNNING if message_id == 0 else JobStatus.PENDING
+    await session.commit()
+
+    await dispatcher.feed_update(bot, update(1, message_id=500, photo=PHOTO_SIZES))
+    await dispatcher.feed_update(bot, update(2, message_id=501, photo=PHOTO_SIZES))
+
+    assert len(await jobs(sessionmaker)) == MAX_QUEUED_JOBS_PER_CHAT
+    assert worker.notified == 0
+    [alert] = telegram.calls(SendMessage)
+    assert alert.chat_id == 1
+    assert f"has {MAX_QUEUED_JOBS_PER_CHAT} captions queued, so new media there is skipped" in alert.text
+
+
+async def test_finished_jobs_do_not_count_toward_the_queue(
+    dispatcher: Dispatcher, bot: Bot, session: AsyncSession, sessionmaker: async_sessionmaker
+) -> None:
+    await seed_chat(session)
+    for message_id in range(MAX_QUEUED_JOBS_PER_CHAT):
+        job = await seed_job(session, message_id=message_id)
+        job.status = JobStatus.DONE
+    await session.commit()
+
+    await dispatcher.feed_update(bot, update(message_id=500, photo=PHOTO_SIZES))
+
+    assert len(await jobs(sessionmaker)) == MAX_QUEUED_JOBS_PER_CHAT + 1
