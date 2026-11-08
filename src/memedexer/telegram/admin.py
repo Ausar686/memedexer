@@ -1,4 +1,4 @@
-"""Group commands: show settings to anyone; change them (and force a recaption) as a chat admin."""
+"""Group commands in approved chats: show settings to anyone; change them (and force a recaption) as a chat admin."""
 
 import collections.abc as cabc
 import html
