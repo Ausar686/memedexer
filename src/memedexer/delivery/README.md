@@ -13,6 +13,12 @@ helpers.
 - Photo: re-sent by `media.photo_file_id`. Image document: downloaded,
   prepared like for captioning, uploaded once as a photo; the resulting file
   id is stored so later replies reuse it.
+- Spoilers: a job with `has_spoiler` gets a blurred photo, and every caption
+  part is wrapped in `<tg-spoiler>` (the markup doesn't count towards the
+  limit below). `hide_replies(chat_id, message_id)` handles a source that
+  became a spoiler after it was captioned: it flags the message's jobs and
+  edits the replies already posted (`editMessageMedia`). A reply that was
+  being sent at that moment is blurred right after it posts.
 - Caption layout (HTML): OCR text in an expandable quote, the description,
   then the hashtags. It must fit Telegram's 1024-character photo caption limit, which
   counts the visible text in UTF-16 units. Tags are always kept; over the
@@ -33,6 +39,8 @@ helpers.
   retryable download errors back off (5 s × attempt, up to
   `MAX_SEND_ATTEMPTS`), then give up and alert the owner.
 - A bad request (e.g. the original was deleted) or lost access gives up quietly.
+- Hiding a reply uses the same retries; when they run out the owner is
+  alerted, and a reply that is gone is skipped quietly.
 
 ## Owner alerts (DM)
 - Captioning `failed` / `refused` jobs and abandoned replies: the error and a

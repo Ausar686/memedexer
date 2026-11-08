@@ -11,7 +11,7 @@ import aiohttp
 from aiogram import Bot
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
-from aiogram.types import BufferedInputFile, InputFile, Message, ReplyParameters
+from aiogram.types import BufferedInputFile, InputFile, InputMediaPhoto, Message, ReplyParameters
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from memedexer.config import Settings
@@ -139,7 +139,7 @@ class Delivery:
             media = await session.get(Media, job.file_unique_id)
 
         try:
-            reply = await self._send(job, media, format_caption(caption.text, caption.description, caption.tags))
+            reply = await self._send(job, media, _caption_html(caption, spoiler=job.has_spoiler))
         except DeliveryFailed as exc:
             async with self._sessionmaker() as session:
                 stored = await session.get(Job, job_id)
@@ -157,23 +157,75 @@ class Delivery:
             if stored_media.photo_file_id is None and reply.photo:
                 stored_media.photo_file_id = reply.photo[-1].file_id
             await session.commit()
+            # Re-read after the commit: the source may have become a spoiler while this reply was being sent, too
+            # late for hide_replies to see the reply.
+            await session.refresh(stored, ["has_spoiler"])
+        if stored.has_spoiler and not job.has_spoiler:
+            await self._hide(job_id)
+        return None
+
+    async def hide_replies(self, chat_id: int, message_id: int) -> None:
+        """Blur the replies to a message whose image was marked as a spoiler after it was captioned."""
+        async with self._sessionmaker() as session:
+            exposed = [job for job in await repo.jobs_for_message(session, chat_id, message_id) if not job.has_spoiler]
+            for job in exposed:
+                job.has_spoiler = True
+            await session.commit()
+        for job in exposed:
+            if job.reply_message_id is not None:
+                await self._hide(job.id)
+        return None
+
+    async def _hide(self, job_id: int) -> None:
+        async with self._sessionmaker() as session:
+            job = await session.get(Job, job_id)
+            chat = await session.get(Chat, job.chat_id)
+            caption = await session.get(Caption, job.caption_id)
+            media = await session.get(Media, job.file_unique_id)
+
+        async def edit() -> object:
+            await self._throttle.wait(job.chat_id)
+            return await self._bot.edit_message_media(
+                InputMediaPhoto(
+                    media=media.photo_file_id,
+                    caption=_caption_html(caption, spoiler=True),
+                    parse_mode=ParseMode.HTML,
+                    has_spoiler=True,
+                ),
+                chat_id=job.chat_id,
+                message_id=job.reply_message_id,
+            )
+
+        try:
+            await self._with_retries(edit)
+        except DeliveryFailed as exc:
+            log.warning("reply of job %d not hidden: %s", job_id, exc)
+            if exc.alert:
+                await self._notify(chat, job, f"⚠️ Couldn't hide a spoiler reply in {describe_chat(chat)}", str(exc))
         return None
 
     async def _send(self, job: Job, media: Media, caption: str) -> Message:
+        async def send() -> Message:
+            photo = media.photo_file_id or await self._upload_source(media)
+            await self._throttle.wait(job.chat_id)
+            return await self._bot.send_photo(
+                job.chat_id,
+                photo,
+                caption=caption,
+                parse_mode=ParseMode.HTML,
+                message_thread_id=None if job.thread_id == NO_TOPIC else job.thread_id,
+                reply_parameters=ReplyParameters(message_id=job.message_id, allow_sending_without_reply=False),
+                disable_notification=True,
+                has_spoiler=job.has_spoiler,
+            )
+
+        return await self._with_retries(send)
+
+    async def _with_retries[T](self, call: t.Callable[[], t.Awaitable[T]]) -> T:
         last_error: Exception | None = None
         for attempt in range(1, MAX_SEND_ATTEMPTS + 1):
             try:
-                photo = media.photo_file_id or await self._upload_source(media)
-                await self._throttle.wait(job.chat_id)
-                return await self._bot.send_photo(
-                    job.chat_id,
-                    photo,
-                    caption=caption,
-                    parse_mode=ParseMode.HTML,
-                    message_thread_id=None if job.thread_id == NO_TOPIC else job.thread_id,
-                    reply_parameters=ReplyParameters(message_id=job.message_id, allow_sending_without_reply=False),
-                    disable_notification=True,
-                )
+                return await call()
             except TelegramRetryAfter as exc:
                 last_error = exc
                 await self._sleep(exc.retry_after)
@@ -231,3 +283,7 @@ class Delivery:
         if link := message_link(chat.id, job.message_id):
             lines.append(link)
         await notify_owner(self._bot, self._settings, "\n".join(lines))
+
+
+def _caption_html(caption: Caption, *, spoiler: bool) -> str:
+    return format_caption(caption.text, caption.description, caption.tags, spoiler=spoiler)

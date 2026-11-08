@@ -77,3 +77,20 @@ def test_truncate() -> None:
 )
 def test_first_sentence(text: str, expected: str) -> None:
     assert first_sentence(text) == expected
+
+
+def test_spoiler_hides_every_part() -> None:
+    caption = format_caption("PLOT <TWIST>", "The hero dies.", ["#ending"], spoiler=True)
+
+    assert caption == (
+        "<blockquote expandable><tg-spoiler>PLOT &lt;TWIST&gt;</tg-spoiler></blockquote>\n"
+        "<tg-spoiler>The hero dies.</tg-spoiler>\n"
+        "<tg-spoiler>#ending</tg-spoiler>"
+    )
+
+
+def test_spoiler_markup_does_not_count_towards_the_limit() -> None:
+    plain = format_caption("x" * 2000, "Desc.", ["#t"])
+    hidden = format_caption("x" * 2000, "Desc.", ["#t"], spoiler=True)
+
+    assert hidden.count("x") == plain.count("x")
