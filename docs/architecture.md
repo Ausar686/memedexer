@@ -34,8 +34,8 @@ update (photo / video / GIF / image or video document) in an approved chat
   whole. Near-identical frames are dropped, so a still picture with music
   costs one frame. Spoken words aren't captioned. Frames are decoded in a
   separate, short-lived process per video with no secrets in its environment
-  and memory, CPU and time limits: a malformed file fails one job, not the
-  bot. Videos over the Bot API's 20 MB download limit are captioned from
+  and memory, CPU, file and time limits, and only common container formats
+  are opened: a malformed file fails one job, not the bot. Videos over the Bot API's 20 MB download limit are captioned from
   Telegram's small thumbnail instead; the job is marked `thumbnail_only` and
   the owner gets a DM.
 - **Topics:** captioning is a per-topic flag, off by default, toggled by chat
@@ -94,5 +94,9 @@ update (photo / video / GIF / image or video document) in an approved chat
   that couldn't be posted are reported to the owner by DM (identical alerts at
   most hourly). Replies interrupted by a restart are retried if they finished
   within the last 24 h.
+- **Secrets:** credentials are masked in logs, in errors stored on jobs and
+  in owner DMs (file URLs embed the bot token). The bot process is
+  non-dumpable, so other processes of its user, like the video decoder, can't
+  read its environment or memory.
 - **Storage:** SQLite (WAL) in a Docker volume via SQLAlchemy async; images are
   not stored, only Telegram `file_id`s.
