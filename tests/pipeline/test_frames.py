@@ -75,3 +75,8 @@ def test_positions_count_from_the_first_timestamp(container: str, codec: str) ->
 
 def test_a_one_second_mpeg_ts_clip_has_a_frame() -> None:
     assert [corner(p) for p in frames.sample_frames(videos.clip(["red"], container="mpegts"))] == ["red"]
+
+
+def test_other_codecs_are_refused() -> None:
+    with pytest.raises(ValueError, match="^unsupported video codec ffv1$"):
+        frames.sample_frames(videos.clip(["red"], container="matroska", codec="ffv1"))

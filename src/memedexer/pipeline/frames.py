@@ -13,6 +13,11 @@ from memedexer.pipeline.sandbox import FRAME_POSITIONS
 # FFmpeg demuxers (by any of their names) for the containers people send videos and GIFs in. FFmpeg can parse hundreds
 # more, including playlists that reference other files; each one is attack surface no meme needs.
 DEMUXERS = ("mov", "matroska", "avi", "mpegts", "mpeg", "flv", "asf", "gif", "h264", "hevc")
+# FFmpeg decoders (as PyAV names them) for the video codecs those containers carry, old phone and web formats included.
+DECODERS = (
+    "h264", "hevc", "vp8", "vp9", "libvpx", "libvpx-vp9", "av1", "libdav1d", "mpeg4", "mpeg1video", "mpeg2video",
+    "h263", "flv", "msmpeg4", "msmpeg4v1", "msmpeg4v2", "wmv1", "wmv2", "wmv3", "vc1", "mjpeg", "gif",
+)
 # Mean per-channel difference (0-255) between 16×16 colour thumbnails below which two frames show the same picture,
 # e.g. a still image with music. Colour, since different hues can share a grayscale level.
 DUPLICATE_THRESHOLD = 6.0
@@ -70,8 +75,10 @@ def _difference(a: PIL.Image.Image, b: PIL.Image.Image) -> float:
 
 
 def _open(data: bytes) -> av.container.InputContainer:
+    # The codec allowlist also binds the decoding FFmpeg does while probing the streams.
+    options = {"format_whitelist": ",".join(DEMUXERS), "codec_whitelist": ",".join(DECODERS)}
     try:
-        return av.open(io.BytesIO(data), options={"format_whitelist": ",".join(DEMUXERS)})
+        return av.open(io.BytesIO(data), options=options)
     except av.ArgumentError as exc:
         # FFmpeg reports a recognised but non-allowlisted container as an invalid argument.
         raise ValueError("unsupported container format") from exc
@@ -80,7 +87,11 @@ def _open(data: bytes) -> av.container.InputContainer:
 def _video_stream(container: av.container.InputContainer) -> av.VideoStream:
     if not container.streams.video:
         raise ValueError("no video stream")
-    return container.streams.video[0]
+    stream = container.streams.video[0]
+    # PyAV opens its own decoder, which the format's codec allowlist doesn't cover.
+    if stream.codec_context.name not in DECODERS:
+        raise ValueError(f"unsupported video codec {stream.codec_context.name}")
+    return stream
 
 
 def _start(container: av.container.InputContainer, stream: av.VideoStream) -> float:
