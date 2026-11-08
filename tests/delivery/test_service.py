@@ -674,6 +674,29 @@ async def test_an_unexpected_crash_is_recorded_and_not_retried(
     assert "RuntimeError" in alert.text
 
 
+@pytest.mark.parametrize(
+    ("media", "photo_error"),
+    [
+        ({"media_type": MediaType.VIDEO_DOCUMENT, "file_size": MAX_DOWNLOAD_BYTES + 1}, None),
+    ],
+    ids=["video-too-big"],
+)
+async def test_a_spoiler_that_would_go_back_as_a_file_gets_only_its_hidden_caption(
+    delivery: Delivery, telegram: FakeTelegram, session: AsyncSession, media: dict, photo_error: str | None
+) -> None:
+    await seed_chat(session)
+    job = await captioned_job(session, reply_file_id=None, has_spoiler=True, **media)
+    if photo_error is not None:
+        telegram.errors[SendPhoto] = TelegramBadRequest(SendPhoto(chat_id=CHAT_ID, photo="x"), photo_error)
+
+    await delivery.deliver(job.id)
+
+    assert telegram.calls(SendDocument) == []
+    [reply] = telegram.calls(SendMessage)
+    assert (reply.chat_id, reply.text, reply.reply_parameters.message_id) == (CHAT_ID, SPOILER_CAPTION, 100)
+    assert reply.link_preview_options.is_disabled is True
+
+
 async def test_persistent_network_errors_give_up_and_alert_owner(
     delivery: Delivery, telegram: FakeTelegram, sleeps: Sleeps, session: AsyncSession, sessionmaker: async_sessionmaker
 ) -> None:

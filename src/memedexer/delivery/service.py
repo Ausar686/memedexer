@@ -19,6 +19,7 @@ from aiogram.types import (
     InputMediaDocument,
     InputMediaPhoto,
     InputMediaVideo,
+    LinkPreviewOptions,
     Message,
     ReplyParameters,
 )
@@ -327,14 +328,22 @@ class Delivery:
                         animation=media.reply_file_id, has_spoiler=job.has_spoiler, **reply
                     )
                 case MediaType.VIDEO_DOCUMENT if _goes_back_as_document(job, media):
-                    await self._throttle.wait(job.chat_id)
-                    return await self._bot.send_document(document=media.file_id, **reply)
+                    return await self._send_file(job, media.file_id, reply)
                 case MediaType.VIDEO | MediaType.VIDEO_DOCUMENT:
                     video = media.reply_file_id or await self._upload_video(media)
                     await self._throttle.wait(job.chat_id)
                     return await self._bot.send_video(video=video, has_spoiler=job.has_spoiler, **reply)
 
         return await self._with_retries(send)
+
+    async def _send_file(self, job: Job, file_id: str, reply: dict[str, t.Any]) -> Message:
+        """Send media back as the file it came as, or for a spoiler only the hidden caption: a file can't be blurred,
+        and its preview would show what the spoiler hides."""
+        await self._throttle.wait(job.chat_id)
+        if not job.has_spoiler:
+            return await self._bot.send_document(document=file_id, **reply)
+        text = {key: value for key, value in reply.items() if key != "caption"} | {"text": reply["caption"]}
+        return await self._bot.send_message(link_preview_options=LinkPreviewOptions(is_disabled=True), **text)
 
     async def _with_retries[T](self, call: t.Callable[[], t.Awaitable[T]]) -> T:
         last_error: Exception | None = None
