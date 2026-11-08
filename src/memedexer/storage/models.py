@@ -24,6 +24,18 @@ class JobTrigger(enum.StrEnum):
     RECAPTION = "recaption"
 
 
+class MediaType(enum.StrEnum):
+    PHOTO = "photo"
+    IMAGE_DOCUMENT = "image_document"
+    VIDEO = "video"
+    VIDEO_DOCUMENT = "video_document"
+    # Telegram's GIFs: silent MP4s (sometimes real GIFs) sent as `animation`.
+    ANIMATION = "animation"
+
+
+VIDEO_MEDIA_TYPES = frozenset({MediaType.VIDEO, MediaType.VIDEO_DOCUMENT, MediaType.ANIMATION})
+
+
 class JobStatus(enum.StrEnum):
     PENDING = "pending"
     RUNNING = "running"
@@ -78,6 +90,7 @@ class Base(orm.DeclarativeBase):
         ChatStatus: _str_enum(ChatStatus),
         JobTrigger: _str_enum(JobTrigger),
         JobStatus: _str_enum(JobStatus),
+        MediaType: _str_enum(MediaType),
     }
 
 
@@ -116,12 +129,17 @@ class Media(Base):
 
     file_unique_id: orm.Mapped[str] = orm.mapped_column(sa.String(64), primary_key=True)
     file_id: orm.Mapped[str] = orm.mapped_column(sa.String(256))
+    media_type: orm.Mapped[MediaType]
     mime_type: orm.Mapped[str] = orm.mapped_column(sa.String(64))
     width: orm.Mapped[int | None]
     height: orm.Mapped[int | None]
     file_size: orm.Mapped[int | None]
-    # A file id `sendPhoto` accepts: the photo itself, or the photo uploaded once for an image document.
-    photo_file_id: orm.Mapped[str | None] = orm.mapped_column(sa.String(256))
+    duration: orm.Mapped[int | None]
+    # Telegram's small preview, captioned instead of a video too big to download.
+    thumbnail_file_id: orm.Mapped[str | None] = orm.mapped_column(sa.String(256))
+    # A file id the reply's send method accepts: the photo, video or animation itself, or the file uploaded once
+    # for a document (documents can't be re-sent as photos or videos by their own id).
+    reply_file_id: orm.Mapped[str | None] = orm.mapped_column(sa.String(256))
     created_at: orm.Mapped[dt.datetime] = orm.mapped_column(default=utcnow)
 
 
@@ -159,6 +177,8 @@ class Job(Timestamped, Base):
     trigger: orm.Mapped[JobTrigger]
     # The source message's media spoiler; replies to it must hide the image and caption too.
     has_spoiler: orm.Mapped[bool] = orm.mapped_column(default=False, server_default=sa.false())
+    # Captioned from Telegram's thumbnail because the video was over the download limit.
+    thumbnail_only: orm.Mapped[bool] = orm.mapped_column(default=False, server_default=sa.false())
     status: orm.Mapped[JobStatus] = orm.mapped_column(default=JobStatus.PENDING)
     attempts: orm.Mapped[int] = orm.mapped_column(default=0)
     error: orm.Mapped[str | None] = orm.mapped_column(sa.Text)

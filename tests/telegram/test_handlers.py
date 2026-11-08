@@ -3,10 +3,10 @@ import sqlalchemy as sa
 from aiogram import Bot, Dispatcher
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from memedexer.storage.models import NO_TOPIC, ChatStatus, Job, JobTrigger, Media
+from memedexer.storage.models import NO_TOPIC, ChatStatus, Job, JobTrigger, Media, MediaType
 from tests.factories import CHAT_ID, THREAD_ID, seed_chat
 from tests.telegram.conftest import SpyReplies, SpyWorker
-from tests.telegram.updates import PHOTO_SIZES, document, update
+from tests.telegram.updates import PHOTO_SIZES, animation, document, update, video
 
 
 async def jobs(sessionmaker: async_sessionmaker[AsyncSession]) -> list[Job]:
@@ -26,9 +26,60 @@ async def test_photo_in_enabled_topic_is_enqueued(
     assert job.trigger is JobTrigger.MESSAGE
     async with sessionmaker() as s:
         media = await s.get(Media, "uy")
-    assert (media.file_id, media.mime_type, media.width, media.height) == ("y", "image/jpeg", 1280, 960)
-    assert media.photo_file_id == "y"
+    assert (media.file_id, media.media_type, media.mime_type, media.width, media.height) == (
+        "y",
+        MediaType.PHOTO,
+        "image/jpeg",
+        1280,
+        960,
+    )
+    assert media.reply_file_id == "y"
     assert worker.notified == 1
+
+
+@pytest.mark.parametrize(
+    ("message", "unique", "media_type"),
+    [
+        ({"video": video()}, "vid", MediaType.VIDEO),
+        ({"animation": animation(), "document": animation()}, "gif", MediaType.ANIMATION),
+        ({"document": {**document("video/mp4", unique="vdoc"), "thumbnail": video()["thumbnail"]}}, "vdoc",
+         MediaType.VIDEO_DOCUMENT),
+    ],
+    ids=["video", "animation", "video-document"],
+)
+async def test_videos_are_enqueued_with_their_details(
+    dispatcher: Dispatcher,
+    bot: Bot,
+    session: AsyncSession,
+    sessionmaker: async_sessionmaker,
+    message: dict,
+    unique: str,
+    media_type: MediaType,
+) -> None:
+    await seed_chat(session)
+
+    await dispatcher.feed_update(bot, update(**message))
+
+    [job] = await jobs(sessionmaker)
+    assert job.file_unique_id == unique
+    async with sessionmaker() as s:
+        media = await s.get(Media, unique)
+    assert (media.media_type, media.thumbnail_file_id) == (media_type, "thumb")
+    assert media.reply_file_id == (None if media_type is MediaType.VIDEO_DOCUMENT else f"file-{unique}")
+
+
+async def test_video_note_and_sticker_are_ignored(
+    dispatcher: Dispatcher, bot: Bot, session: AsyncSession, sessionmaker: async_sessionmaker
+) -> None:
+    await seed_chat(session)
+    note = {"file_id": "n", "file_unique_id": "un", "length": 240, "duration": 5}
+    sticker = {"file_id": "s", "file_unique_id": "us", "type": "regular", "width": 512, "height": 512,
+               "is_animated": False, "is_video": True}
+
+    await dispatcher.feed_update(bot, update(1, video_note=note))
+    await dispatcher.feed_update(bot, update(2, sticker=sticker))
+
+    assert await jobs(sessionmaker) == []
 
 
 async def test_document_in_chat_without_topics(

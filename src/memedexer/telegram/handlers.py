@@ -1,4 +1,4 @@
-"""Group message handlers that turn incoming images into captioning jobs."""
+"""Group message handlers that turn incoming images and videos into captioning jobs."""
 
 import logging
 import typing as t
@@ -9,12 +9,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from memedexer.storage import repo
 from memedexer.storage.models import ChatStatus, JobTrigger, Topic
-from memedexer.telegram.media import extract_image, topic_id
+from memedexer.telegram.media import extract_media, save_media, topic_id
 
 log = logging.getLogger(__name__)
 
 _in_group = F.chat.type.in_({"group", "supergroup"})
-_has_image = F.photo | F.document
+_has_media = F.photo | F.document | F.video | F.animation
 
 
 class Notifier(t.Protocol):
@@ -27,16 +27,16 @@ class ReplyHider(t.Protocol):
 
 def build_router() -> Router:
     router = Router(name="ingestion")
-    router.message.register(on_image, _in_group, _has_image)
-    router.edited_message.register(on_edited_image, _in_group, _has_image)
+    router.message.register(on_media, _in_group, _has_media)
+    router.edited_message.register(on_edited_media, _in_group, _has_media)
     return router
 
 
-async def on_image(message: Message, sessionmaker: async_sessionmaker[AsyncSession], worker: Notifier) -> None:
+async def on_media(message: Message, sessionmaker: async_sessionmaker[AsyncSession], worker: Notifier) -> None:
     await ingest(message, JobTrigger.MESSAGE, sessionmaker, worker)
 
 
-async def on_edited_image(
+async def on_edited_media(
     message: Message, sessionmaker: async_sessionmaker[AsyncSession], worker: Notifier, delivery: ReplyHider
 ) -> None:
     await ingest(message, JobTrigger.EDIT, sessionmaker, worker, delivery)
@@ -51,10 +51,10 @@ async def ingest(
 ) -> bool:
     """Enqueue a job if the chat is approved and the topic has captioning on; True when one was enqueued.
 
-    An edit that keeps the image but adds a spoiler hides the replies already posted instead.
+    An edit that keeps the file but adds a spoiler hides the replies already posted instead.
     """
-    image = extract_image(message)
-    if image is None:
+    media = extract_media(message)
+    if media is None:
         return False
     thread_id = topic_id(message)
     async with sessionmaker() as session:
@@ -65,28 +65,19 @@ async def ingest(
         if topic is None or not topic.captioning_enabled:
             return False
         if trigger is JobTrigger.EDIT:
-            # Edits that only touch the text keep the same file; only a replaced image needs a new caption.
+            # Edits that only touch the text keep the same file; only replaced media needs a new caption.
             previous = await repo.latest_job_for_message(session, chat.id, message.message_id)
-            if previous is not None and previous.file_unique_id == image.file_unique_id:
+            if previous is not None and previous.file_unique_id == media.file_unique_id:
                 if message.has_media_spoiler and delivery is not None:
                     await delivery.hide_replies(chat.id, message.message_id)
                 return False
-        await repo.upsert_media(
-            session,
-            file_unique_id=image.file_unique_id,
-            file_id=image.file_id,
-            mime_type=image.mime_type,
-            width=image.width,
-            height=image.height,
-            file_size=image.file_size,
-            photo_file_id=image.photo_file_id,
-        )
+        await save_media(session, media)
         job = await repo.enqueue_job(
             session,
             chat_id=chat.id,
             thread_id=thread_id,
             message_id=message.message_id,
-            file_unique_id=image.file_unique_id,
+            file_unique_id=media.file_unique_id,
             trigger=trigger,
             has_spoiler=bool(message.has_media_spoiler),
         )

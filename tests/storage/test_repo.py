@@ -5,7 +5,7 @@ import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from memedexer.storage import repo
-from memedexer.storage.models import NO_TOPIC, Caption, ChatStatus, Job, JobStatus, JobTrigger
+from memedexer.storage.models import NO_TOPIC, Caption, ChatStatus, Job, JobStatus, JobTrigger, MediaType
 
 T0 = dt.datetime(2026, 10, 1, 12, tzinfo=dt.UTC)
 
@@ -16,7 +16,14 @@ async def _chat(session: AsyncSession, chat_id: int = -100) -> None:
 
 async def _media(session: AsyncSession, file_unique_id: str = "u1") -> None:
     await repo.upsert_media(
-        session, file_unique_id=file_unique_id, file_id="f1", mime_type="image/jpeg", width=10, height=20, file_size=0
+        session,
+        file_unique_id=file_unique_id,
+        file_id="f1",
+        media_type=MediaType.PHOTO,
+        mime_type="image/jpeg",
+        width=10,
+        height=20,
+        file_size=0,
     )
 
 
@@ -75,7 +82,14 @@ async def test_topic_defaults_to_disabled_and_is_reused(session: AsyncSession) -
 async def test_upsert_media_refreshes_file_id(session: AsyncSession) -> None:
     await _media(session)
     media = await repo.upsert_media(
-        session, file_unique_id="u1", file_id="f2", mime_type="image/png", width=10, height=20, file_size=3
+        session,
+        file_unique_id="u1",
+        file_id="f2",
+        media_type=MediaType.PHOTO,
+        mime_type="image/png",
+        width=10,
+        height=20,
+        file_size=3,
     )
     assert (media.file_id, media.file_size) == ("f2", 3)
 
@@ -233,25 +247,31 @@ async def test_migrate_unknown_chat_is_noop(session: AsyncSession) -> None:
     assert await repo.migrate_chat(session, -1, -2) is False
 
 
-async def test_upsert_media_keeps_known_photo_file_id(session: AsyncSession) -> None:
-    await repo.upsert_media(
-        session, file_unique_id="d", file_id="doc1", mime_type="image/png", width=None, height=None, file_size=1
+async def test_upsert_media_keeps_known_reply_file_id(session: AsyncSession) -> None:
+    async def upsert(file_id: str, reply_file_id: str | None = None) -> object:
+        return await repo.upsert_media(
+            session,
+            file_unique_id="v",
+            file_id=file_id,
+            media_type=MediaType.VIDEO_DOCUMENT,
+            mime_type="video/mp4",
+            width=None,
+            height=None,
+            file_size=1,
+            duration=7,
+            thumbnail_file_id="thumb",
+            reply_file_id=reply_file_id,
+        )
+
+    await upsert("doc1")
+    assert (await upsert("doc1", reply_file_id="uploaded")).reply_file_id == "uploaded"
+    media = await upsert("doc2")
+    assert (media.file_id, media.reply_file_id, media.duration, media.thumbnail_file_id) == (
+        "doc2",
+        "uploaded",
+        7,
+        "thumb",
     )
-    media = await repo.upsert_media(
-        session,
-        file_unique_id="d",
-        file_id="doc1",
-        mime_type="image/png",
-        width=None,
-        height=None,
-        file_size=1,
-        photo_file_id="uploaded",
-    )
-    assert media.photo_file_id == "uploaded"
-    media = await repo.upsert_media(
-        session, file_unique_id="d", file_id="doc2", mime_type="image/png", width=None, height=None, file_size=1
-    )
-    assert (media.file_id, media.photo_file_id) == ("doc2", "uploaded")
 
 
 async def test_undelivered_jobs(session: AsyncSession) -> None:

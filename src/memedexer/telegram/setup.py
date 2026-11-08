@@ -15,7 +15,7 @@ GROUP_COMMANDS = [
     BotCommand(command="captions", description="on|off: caption images in this topic (admins)"),
     BotCommand(command="model", description="[chat] <model>|reset: choose the model (admins)"),
     BotCommand(command="language", description="<language>|reset: description language (admins)"),
-    BotCommand(command="recaption", description="Reply to an image to caption it again (admins)"),
+    BotCommand(command="recaption", description="Reply to an image or a video to caption it again (admins)"),
 ]
 PRIVATE_COMMANDS = [
     BotCommand(command="start", description="About this bot"),
