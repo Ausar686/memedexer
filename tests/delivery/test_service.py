@@ -230,7 +230,7 @@ async def test_failing_to_hide_a_reply_alerts_the_owner(
     assert "Couldn't hide a spoiler reply" in alert.text
 
 
-async def test_deleted_reply_is_not_hidden_quietly(
+async def test_deleted_reply_is_skipped_without_an_alert(
     delivery: Delivery, telegram: FakeTelegram, session: AsyncSession
 ) -> None:
     await seed_chat(session)
