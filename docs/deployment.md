@@ -58,8 +58,9 @@ The owner manages chats with `/chats` in the bot's DM.
   docker compose exec bot python -c "import sqlite3; sqlite3.connect('/data/memedexer.db').backup(sqlite3.connect('/data/backup.db'))"
   docker compose cp bot:/data/backup.db ./memedexer-backup.db
   ```
-- **Costs:** per-chat limits come from `COST_LIMIT_*_USD`; the owner gets a
-  DM when a chat reaches one, and `/settings` shows current spend.
+- **Costs:** per-chat limits come from `COST_LIMIT_*_USD`, the limit across
+  all chats from `COST_LIMIT_TOTAL_MONTHLY_USD`; the owner gets a DM when one
+  is reached, and `/settings` shows a chat's current spend.
 
 ## Troubleshooting
 - **Telegram calls fail with `Request timeout error`** while `curl` on the host

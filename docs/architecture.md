@@ -15,7 +15,7 @@ update (photo / video / GIF / image or video document) in an approved chat
   → topic has captioning enabled?           no → ignore
   → enqueue job (persisted, survives restarts)
   → worker: resolve provider/model (topic → chat → env default)
-  → budget check (chat's daily/weekly/monthly spend)   over → budget_exceeded
+  → budget check (chat's daily/weekly/monthly spend, all chats' monthly)   over → budget_exceeded
   → dedup by file_unique_id: reuse latest caption, or download + caption via provider
     (a video: frames sampled in a separate process, all sent in one request)
   → post silent reply: the same media + formatted caption
@@ -83,11 +83,15 @@ update (photo / video / GIF / image or video document) in an approved chat
   replies already posted are blurred. Removing a spoiler leaves the replies
   hidden.
 - **Rate limits:** replies go through a per-chat send queue, since Telegram
-  allows bots about 20 messages per minute per group.
+  allows bots about 20 messages per minute per group. A chat can have at most
+  50 captions waiting or running; past that, its new media is skipped (the
+  owner gets one DM an hour). Workers take the next job from the chat with
+  the fewest running, so one busy chat can't starve the others.
 - **Budgets:** per-chat spend limits from `.env` (defaults: $20 daily, $100
-  weekly, $200 monthly), in UTC calendar periods (ISO weeks start on Monday).
-  Over the limit, jobs are marked `budget_exceeded` and skipped; the owner
-  gets one DM per period. Nothing is posted in the chat.
+  weekly, $200 monthly), plus a total monthly limit across all chats
+  (default $200), in UTC calendar periods (ISO weeks start on Monday). Over a
+  limit, jobs are marked `budget_exceeded` and skipped; the owner gets one DM
+  per period. Nothing is posted in the chat.
 - **Dedup:** an image already captioned anywhere (same `file_unique_id`) reuses
   its latest caption for free; `/recaption` forces a new one.
 - **Process health:** if the worker dies, polling stops and the process exits

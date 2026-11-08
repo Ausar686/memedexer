@@ -19,7 +19,8 @@ For each claimed job the worker, in order:
 3. **Dedup:** reuses the latest caption of the same `file_unique_id`, from any
    chat and any model, at no cost. `recaption` jobs skip this step.
 4. **Budget:** marks the job `budget_exceeded` if the chat has reached its
-   daily, weekly or monthly limit (UTC calendar periods, ISO weeks).
+   daily, weekly or monthly limit, or all chats together have reached the
+   total monthly limit (UTC calendar periods, ISO weeks).
 5. Fails it if the resolved provider has no API key.
 6. Downloads the file, fits it to provider limits in the sandbox (see
    below), and calls the provider. A video becomes its sampled frames, all
@@ -97,7 +98,10 @@ cancels a worker that overruns its stop deadline.
 
 ## Concurrency
 `WORKER_CONCURRENCY` loops share the queue; claiming is a single atomic
-`UPDATE … RETURNING`. The budget check happens before the call, so a chat can
+`UPDATE … RETURNING`. The next job comes from the chat with the fewest jobs
+running (oldest first), so a chat flooding the queue can't starve the others,
+while a lone busy chat still gets every loop. The budget check happens before
+the call, so a chat can
 overshoot its limit by at most one call per concurrent loop (fractions of a
 cent at default models). Handlers call `Worker.notify()` after enqueueing so
 idle loops wake immediately instead of waiting for the 5 s poll.

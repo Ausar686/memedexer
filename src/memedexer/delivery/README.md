@@ -60,7 +60,11 @@ helpers.
 - A `thumbnail_only` job (a video over the download limit): a notice that the
   caption came from the small preview, with a link.
 - Captioning `failed` / `refused` jobs and abandoned replies: the error and a
-  link to the message (supergroups only). Identical alerts for the same chat
-  are sent at most once an hour, so an outage doesn't flood the DM.
+  link to the message (supergroups only).
+- Each kind of alert above is sent at most once an hour per chat
+  (`ALERT_INTERVAL_SECONDS`), whatever the error text (it can differ for every
+  file), so an outage or a flood of bad files doesn't flood the DM; the next
+  alert says how many were held back.
 - Over budget: one DM per chat and period, sent for the period's first
   `budget_exceeded` job (lowest id, so concurrent jobs can't both skip it).
+  Over the total limit, one DM per period for all chats.
