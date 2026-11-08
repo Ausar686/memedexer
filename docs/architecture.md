@@ -69,7 +69,9 @@ update (photo / image document) in an approved chat
 - **Shutdown:** on stop, polling ends, the worker finishes its current job
   (up to 15 s), queued replies are posted (up to 10 s), then the database
   closes; together this fits compose's 30 s stop grace period. Anything cut
-  off is resumed on the next start.
+  off is resumed on the next start, unless a job was interrupted on its last
+  attempt: it fails instead, so a file that crashes the process can't take
+  the bot down on every restart.
 - **Failures:** silent in the chat; refusals, exhausted retries and replies
   that couldn't be posted are reported to the owner by DM (identical alerts at
   most hourly). Replies interrupted by a restart are retried if they finished

@@ -139,6 +139,19 @@ async def claim_next_job(session: AsyncSession, now: dt.datetime | None = None) 
     return await session.scalar(query)
 
 
+async def fail_exhausted_interrupted_jobs(session: AsyncSession, max_attempts: int) -> list[Job]:
+    """Fail RUNNING jobs left by a crashed process on their last attempt; call once at startup, before requeueing.
+
+    Requeueing those would let a file that crashes the process do it again on every restart.
+    """
+    query = sa.select(Job).where(Job.status == JobStatus.RUNNING, Job.attempts >= max_attempts).order_by(Job.id)
+    jobs = list(await session.scalars(query))
+    for job in jobs:
+        finish_job(job, JobStatus.FAILED, error=f"interrupted on attempt {job.attempts}; it may crash the process")
+    await session.flush()
+    return jobs
+
+
 async def requeue_interrupted_jobs(session: AsyncSession) -> int:
     """Return RUNNING jobs left by a crashed process to PENDING; call once at startup."""
     result = await session.execute(

@@ -29,7 +29,9 @@ For each claimed job the worker, in order:
   `available_at` delayed by 30 s × 4^(attempt−1), capped at 15 min.
 - After `MAX_ATTEMPTS` claims the job is `failed`.
 - An unexpected exception fails the job instead of killing the worker.
-- `run()` puts jobs left `running` by a crash back to `pending` at startup.
+- `run()` puts jobs left `running` by a crash back to `pending` at startup,
+  except those already on their last attempt: they fail (and the owner is
+  alerted), so a file that crashes the process can't do it on every restart.
 
 ## Stopping
 `stop()` lets each loop finish its current job and exit; `run()` then

@@ -91,8 +91,12 @@ class Worker:
 
     async def run(self) -> None:
         async with self._sessionmaker() as session:
+            exhausted = await repo.fail_exhausted_interrupted_jobs(session, MAX_ATTEMPTS)
             requeued = await repo.requeue_interrupted_jobs(session)
             await session.commit()
+        for job in exhausted:
+            log.error("job %d was interrupted on its last attempt; failing it", job.id)
+            await self._notify_listener(job)
         if requeued:
             log.info("requeued %d interrupted jobs", requeued)
         await asyncio.gather(*(self._loop() for _ in range(self._settings.worker_concurrency)))
@@ -123,11 +127,14 @@ class Worker:
                 repo.finish_job(job, JobStatus.FAILED, error=f"internal error: {exc!r}")
             await session.commit()
         if job.status in TERMINAL_JOB_STATUSES:
-            try:
-                await self._listener.job_finished(job)
-            except Exception:
-                log.exception("listener failed for job %d", job.id)
+            await self._notify_listener(job)
         return True
+
+    async def _notify_listener(self, job: Job) -> None:
+        try:
+            await self._listener.job_finished(job)
+        except Exception:
+            log.exception("listener failed for job %d", job.id)
 
     async def _process(self, session: AsyncSession, job: Job) -> None:
         chat = await session.get(Chat, job.chat_id)
