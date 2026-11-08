@@ -379,6 +379,29 @@ async def test_hiding_a_video_reply_edits_it_as_a_video(
     assert (edit.media.media, edit.media.has_spoiler) == ("file-uniq", True)
 
 
+async def test_hiding_skips_a_reply_sent_back_as_a_document(
+    delivery: Delivery, telegram: FakeTelegram, session: AsyncSession
+) -> None:
+    await seed_chat(session)
+    # The message first held a video document too big to re-upload, then was edited to a photo.
+    document = await captioned_job(
+        session,
+        file_unique_id="vdoc",
+        media_type=MediaType.VIDEO_DOCUMENT,
+        reply_file_id=None,
+        file_size=MAX_DOWNLOAD_BYTES + 1,
+    )
+    photo = await captioned_job(session)
+    await delivery.deliver(document.id)
+    await delivery.deliver(photo.id)
+
+    await delivery.hide_replies(CHAT_ID, 100)
+
+    [edit] = telegram.calls(EditMessageMedia)
+    assert (edit.message_id, edit.media.media) == (1001, "photo-file")
+    assert telegram.calls(SendMessage) == []
+
+
 async def test_retry_after_is_honored(
     delivery: Delivery, telegram: FakeTelegram, sleeps: Sleeps, session: AsyncSession, sessionmaker: async_sessionmaker
 ) -> None:

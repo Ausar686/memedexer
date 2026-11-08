@@ -193,6 +193,10 @@ class Delivery:
             chat = await session.get(Chat, job.chat_id)
             caption = await session.get(Caption, job.caption_id)
             media = await session.get(Media, job.file_unique_id)
+        if media.reply_file_id is None:
+            # The reply went back as a document (a video too big to re-upload), and documents can't be blurred.
+            log.warning("reply of job %d is a document and can't be hidden", job_id)
+            return None
 
         input_media = {
             MediaType.PHOTO: InputMediaPhoto,

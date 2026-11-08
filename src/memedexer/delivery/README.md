@@ -22,7 +22,8 @@ helpers.
   became a spoiler after it was captioned: it flags the message's jobs and
   edits the replies already posted (`editMessageMedia`). A reply that was
   being sent at that moment is blurred right after it posts. The edit uses
-  the input media type matching the reply (photo, video or GIF).
+  the input media type matching the reply (photo, video or GIF); a reply
+  that went back as a document can't be blurred and is skipped.
 - Caption layout (HTML): OCR text in an expandable quote, the description,
   then the hashtags. It must fit Telegram's 1024-character photo caption limit, which
   counts the visible text in UTF-16 units. Tags are always kept; over the
