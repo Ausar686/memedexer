@@ -22,7 +22,8 @@ class BotDownloader:
         try:
             await self._bot.download(file_id, destination=buffer, timeout=DOWNLOAD_TIMEOUT_SECONDS)
         except TelegramBadRequest as exc:
-            raise DownloadError(self._message("telegram rejected the download", exc), retryable=False) from exc
+            message = self._message("telegram rejected the download", exc)
+            raise DownloadError(message, retryable=False, too_big="file is too big" in exc.message) from exc
         except (TelegramAPIError, aiohttp.ClientError, TimeoutError) as exc:
             raise DownloadError(self._message("download failed", exc), retryable=True) from exc
         return buffer.getvalue()

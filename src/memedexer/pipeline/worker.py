@@ -41,9 +41,12 @@ MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024
 
 
 class DownloadError(Exception):
-    def __init__(self, message: str, *, retryable: bool) -> None:
+    """`too_big` when Telegram refused the file for the download limit, whatever size the message stated."""
+
+    def __init__(self, message: str, *, retryable: bool, too_big: bool = False) -> None:
         super().__init__(message)
         self.retryable = retryable
+        self.too_big = too_big
 
 
 class Downloader(t.Protocol):
@@ -217,13 +220,22 @@ class Worker:
             data = await self._downloader.download(media.file_id)
             return [await prepare_image(data)]
         if over_download_limit(media.file_size):
-            if media.thumbnail_file_id is None:
-                raise VideoError("the video is over the Bot API's 20 MB download limit and has no thumbnail")
-            job.thumbnail_only = True
-            data = await self._downloader.download(media.thumbnail_file_id)
-            return [await prepare_image(data)]
-        data = await self._downloader.download(media.file_id)
+            return await self._thumbnail(job, media)
+        try:
+            data = await self._downloader.download(media.file_id)
+        except DownloadError as exc:
+            # Messages don't always state a size; Telegram's refusal is the final word.
+            if not exc.too_big:
+                raise
+            return await self._thumbnail(job, media)
         return await extract_frames(data, media.duration)
+
+    async def _thumbnail(self, job: Job, media: Media) -> list[Image]:
+        if media.thumbnail_file_id is None:
+            raise VideoError("the video is over the Bot API's 20 MB download limit and has no thumbnail")
+        job.thumbnail_only = True
+        data = await self._downloader.download(media.thumbnail_file_id)
+        return [await prepare_image(data)]
 
     @staticmethod
     def _charge(job: Job, model: ModelSpec, usage: Usage | None) -> None:

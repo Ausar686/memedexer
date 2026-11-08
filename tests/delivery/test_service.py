@@ -493,12 +493,25 @@ async def test_hiding_a_reply_shared_by_edits_shows_the_latest_media_once(
     assert (hide.message_id, hide.media.media, hide.media.has_spoiler) == (555, "photo-b", True)
 
 
+@pytest.mark.parametrize(
+    ("file_size", "thumbnail_only"), [(MAX_DOWNLOAD_BYTES + 1, False), (None, True)], ids=["stated", "refused"]
+)
 async def test_video_document_too_big_to_upload_goes_back_as_a_document(
-    delivery: Delivery, telegram: FakeTelegram, downloader: FakeDownloader, session: AsyncSession
+    delivery: Delivery,
+    telegram: FakeTelegram,
+    downloader: FakeDownloader,
+    session: AsyncSession,
+    file_size: int | None,
+    thumbnail_only: bool,
 ) -> None:
     await seed_chat(session)
+    # Without a stated size, the worker's thumbnail fallback is what tells that Telegram refused the file.
     job = await captioned_job(
-        session, media_type=MediaType.VIDEO_DOCUMENT, reply_file_id=None, file_size=MAX_DOWNLOAD_BYTES + 1
+        session,
+        media_type=MediaType.VIDEO_DOCUMENT,
+        reply_file_id=None,
+        file_size=file_size,
+        thumbnail_only=thumbnail_only,
     )
 
     await delivery.deliver(job.id)
