@@ -4,7 +4,7 @@ import decimal
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from memedexer.config import Settings
-from memedexer.pipeline.budget import Period, exceeded_period, limits_microusd, period_starts
+from memedexer.pipeline.budget import Limit, Period, exceeded_limit, limits, limits_microusd, period_starts
 from memedexer.storage import repo
 from tests.factories import CHAT_ID, seed_chat, seed_job
 
@@ -35,24 +35,54 @@ def test_limits_in_microusd(settings: Settings) -> None:
     assert limits_microusd(settings) == {Period.DAILY: 500_000, Period.WEEKLY: 100_000_000, Period.MONTHLY: 200_000_000}
 
 
-async def _spend(session: AsyncSession, cost: int, finished_at: dt.datetime, message_id: int) -> None:
-    job = await seed_job(session, message_id=message_id)
+def test_limits_check_the_chat_first_then_all_chats(settings: Settings) -> None:
+    settings.cost_limit_total_monthly_usd = decimal.Decimal("150")
+
+    assert limits(settings) == [
+        Limit(Period.DAILY, 20_000_000),
+        Limit(Period.WEEKLY, 100_000_000),
+        Limit(Period.MONTHLY, 200_000_000),
+        Limit(Period.MONTHLY, 150_000_000, total=True),
+    ]
+    assert [str(limit) for limit in limits(settings)] == ["daily", "weekly", "monthly", "total monthly"]
+
+
+async def _spend(
+    session: AsyncSession, cost: int, finished_at: dt.datetime, message_id: int, chat_id: int = CHAT_ID
+) -> None:
+    job = await seed_job(session, message_id=message_id, chat_id=chat_id)
     job.cost_microusd, job.finished_at = cost, finished_at
     await session.commit()
 
 
-async def test_exceeded_period(session: AsyncSession, settings: Settings) -> None:
+async def test_exceeded_limit(session: AsyncSession, settings: Settings) -> None:
     settings.cost_limit_daily_usd = decimal.Decimal("1")
     settings.cost_limit_weekly_usd = decimal.Decimal("2")
     await seed_chat(session)
 
     await _spend(session, 999_999, NOW, 1)
-    assert await exceeded_period(session, CHAT_ID, settings, NOW) is None
+    assert await exceeded_limit(session, CHAT_ID, settings, NOW) is None
 
     await _spend(session, 1, NOW, 2)
-    assert await exceeded_period(session, CHAT_ID, settings, NOW) is Period.DAILY
-    assert await exceeded_period(session, CHAT_ID, settings, NOW + dt.timedelta(days=1)) is None
+    assert await exceeded_limit(session, CHAT_ID, settings, NOW) == Limit(Period.DAILY, 1_000_000)
+    assert await exceeded_limit(session, CHAT_ID, settings, NOW + dt.timedelta(days=1)) is None
 
     await _spend(session, 1_000_000, NOW - dt.timedelta(days=2), 3)
-    assert await exceeded_period(session, CHAT_ID, settings, NOW + dt.timedelta(days=1)) is Period.WEEKLY
+    tomorrow = NOW + dt.timedelta(days=1)
+    assert await exceeded_limit(session, CHAT_ID, settings, tomorrow) == Limit(Period.WEEKLY, 2_000_000)
     assert await repo.spent_microusd(session, CHAT_ID, NOW - dt.timedelta(days=30)) == 2_000_000
+
+
+async def test_total_limit_counts_every_chat(session: AsyncSession, settings: Settings) -> None:
+    settings.cost_limit_total_monthly_usd = decimal.Decimal("3")
+    other = CHAT_ID - 1
+    await seed_chat(session)
+    await seed_chat(session, chat_id=other)
+
+    await _spend(session, 2_000_000, NOW, 1)
+    assert await exceeded_limit(session, other, settings, NOW) is None
+
+    await _spend(session, 1_000_000, NOW - dt.timedelta(days=1), 2, chat_id=other)
+    # Neither chat is over its own limits, but together they reached the total.
+    assert await exceeded_limit(session, other, settings, NOW) == Limit(Period.MONTHLY, 3_000_000, total=True)
+    assert await repo.spent_microusd(session, None, NOW - dt.timedelta(days=30)) == 3_000_000

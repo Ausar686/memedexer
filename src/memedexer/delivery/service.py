@@ -373,18 +373,24 @@ class Delivery:
         finished_at = job.finished_at or utcnow()
         async with self._sessionmaker() as session:
             chat = await session.get(Chat, job.chat_id)
-            period = await budget.exceeded_period(session, job.chat_id, self._settings, finished_at)
-            if period is None:
+            limit = await budget.exceeded_limit(session, job.chat_id, self._settings, finished_at)
+            if limit is None:
                 return
-            if await repo.earlier_budget_exceeded(session, job, budget.period_starts(finished_at)[period]):
+            since = budget.period_starts(finished_at)[limit.period]
+            if await repo.earlier_budget_exceeded(session, job, since, any_chat=limit.total):
                 return
-        limit = budget.limits_microusd(self._settings)[period] / 1_000_000
-        await notify_owner(
-            self._bot,
-            self._settings,
-            f"💸 {describe_chat(chat)} reached its {period} budget of ${limit:.2f}. "
-            "Captioning is paused there until the period resets (UTC).",
-        )
+        usd = limit.microusd / 1_000_000
+        if limit.total:
+            text = (
+                f"💸 Spending across all chats reached the total {limit.period} budget of ${usd:.2f}. "
+                "Captioning is paused in every chat until the period resets (UTC)."
+            )
+        else:
+            text = (
+                f"💸 {describe_chat(chat)} reached its {limit.period} budget of ${usd:.2f}. "
+                "Captioning is paused there until the period resets (UTC)."
+            )
+        await notify_owner(self._bot, self._settings, text)
 
     async def _notify(self, chat: Chat, job: Job, headline: str, error: str = "") -> None:
         """DM the owner, at most once per chat and kind of alert per interval, so an outage or a flood of bad files

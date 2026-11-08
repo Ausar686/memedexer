@@ -37,6 +37,8 @@ class Settings(DatabaseSettings):
     cost_limit_daily_usd: decimal.Decimal = pydantic.Field(default=decimal.Decimal(20), gt=0)
     cost_limit_weekly_usd: decimal.Decimal = pydantic.Field(default=decimal.Decimal(100), gt=0)
     cost_limit_monthly_usd: decimal.Decimal = pydantic.Field(default=decimal.Decimal(200), gt=0)
+    # Across all chats together, so approving more chats doesn't multiply what the owner can be billed.
+    cost_limit_total_monthly_usd: decimal.Decimal = pydantic.Field(default=decimal.Decimal(200), gt=0)
 
     worker_concurrency: int = pydantic.Field(default=4, gt=0)
     log_level: str = "INFO"

@@ -759,6 +759,29 @@ async def test_budget_alert_only_for_first_over_budget_job(
     assert "reached its daily budget of $0.00" in alert.text
 
 
+async def test_total_budget_alert_is_sent_once_for_all_chats(
+    delivery: Delivery, telegram: FakeTelegram, settings: Settings, session: AsyncSession
+) -> None:
+    settings.cost_limit_total_monthly_usd = decimal.Decimal("0.0001")
+    other = CHAT_ID - 1
+    await seed_chat(session)
+    await seed_chat(session, chat_id=other)
+    spent = await seed_job(session, message_id=1)
+    spent.cost_microusd = 100
+    repo.finish_job(spent, JobStatus.DONE)
+    over = [await seed_job(session, message_id=2), await seed_job(session, message_id=3, chat_id=other)]
+    for job in over:
+        repo.finish_job(job, JobStatus.BUDGET_EXCEEDED, error="total monthly limit reached")
+    await session.commit()
+
+    for job in reversed(over):
+        await delivery.job_finished(job)
+
+    [alert] = telegram.calls(SendMessage)
+    assert alert.text.startswith("💸 Spending across all chats reached the total monthly budget of $0.00.")
+    assert "paused in every chat" in alert.text
+
+
 async def test_crashing_delivery_does_not_stop_the_queue(
     delivery: Delivery, telegram: FakeTelegram, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
