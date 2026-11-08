@@ -1,16 +1,21 @@
-"""Group commands: show settings to anyone; change them (and force a recaption) as a chat admin."""
+"""Group commands in approved chats: show settings to anyone; change them (and force a recaption) as a chat admin."""
 
+import collections.abc as cabc
 import html
+import logging
 import re
+import typing as t
 
 from aiogram import Bot, F, Router
 from aiogram.enums import ChatMemberStatus
+from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command, CommandObject
 from aiogram.types import Message
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from memedexer.captioning.catalog import MODELS, find_model
 from memedexer.config import Settings
+from memedexer.cooldown import Cooldown
 from memedexer.pipeline.budget import limits_microusd, period_starts
 from memedexer.pipeline.resolve import resolve_caption_settings
 from memedexer.storage import repo
@@ -18,22 +23,45 @@ from memedexer.storage.models import DESCRIPTION_LANGUAGE_MAX_LENGTH, Chat, Chat
 from memedexer.telegram.handlers import Notifier
 from memedexer.telegram.media import extract_media, save_media, topic_id
 
+log = logging.getLogger(__name__)
+
 _in_group = F.chat.type.in_({"group", "supergroup"})
 _LANGUAGE = re.compile(rf"^[^\W\d_][\w\s()-]{{0,{DESCRIPTION_LANGUAGE_MAX_LENGTH - 1}}}$")
 
 NOT_APPROVED = "This chat is waiting for the bot owner's approval."
+# Anyone in a chat that isn't approved can send commands; answer them at most this often.
+NOT_APPROVED_NOTICE_INTERVAL_SECONDS = 60 * 60
 ADMINS_ONLY = "Only chat admins can change this."
 MODEL_SOURCES = {"topic": "set for this topic", "chat": "set for this chat", "default": "default"}
 
 
 def build_admin_router() -> Router:
     router = Router(name="admin")
+    router.message.middleware(require_approved_chat)
     router.message.register(show_settings, _in_group, Command("settings"))
     router.message.register(toggle_captions, _in_group, Command("captions"))
     router.message.register(set_model, _in_group, Command("model"))
     router.message.register(set_language, _in_group, Command("language"))
     router.message.register(recaption, _in_group, Command("recaption"))
     return router
+
+
+Handler = cabc.Callable[[Message, dict[str, t.Any]], cabc.Awaitable[object]]
+
+
+async def require_approved_chat(handler: Handler, message: Message, data: dict[str, t.Any]) -> object:
+    """Run a command only in an approved chat; elsewhere, say so at most once per chat per interval.
+
+    Checked before anything else, so a chat that isn't approved gets no usage text and causes no admin lookups.
+    """
+    async with data["sessionmaker"]() as session:
+        chat = await repo.get_chat(session, message.chat.id)
+    if chat is None or chat.status is not ChatStatus.APPROVED:
+        notices: Cooldown = data["approval_notices"]
+        if notices.ready(message.chat.id):
+            await message.reply(NOT_APPROVED)
+        return None
+    return await handler(message, data)
 
 
 async def is_chat_admin(bot: Bot, message: Message, settings: Settings) -> bool:
@@ -43,16 +71,18 @@ async def is_chat_admin(bot: Bot, message: Message, settings: Settings) -> bool:
         return False
     if message.from_user.id == settings.owner_user_id:
         return True
-    member = await bot.get_chat_member(message.chat.id, message.from_user.id)
+    try:
+        member = await bot.get_chat_member(message.chat.id, message.from_user.id)
+    except TelegramAPIError as exc:
+        log.warning("can't check if user %d is an admin in chat %d: %s", message.from_user.id, message.chat.id, exc)
+        return False
     return member.status in (ChatMemberStatus.CREATOR, ChatMemberStatus.ADMINISTRATOR)
 
 
 async def _approved_chat(session: AsyncSession, message: Message) -> Chat | None:
+    """`require_approved_chat` checked it already; `None` only if it was revoked since."""
     chat = await repo.get_chat(session, message.chat.id)
-    if chat is None or chat.status is not ChatStatus.APPROVED:
-        await message.reply(NOT_APPROVED)
-        return None
-    return chat
+    return chat if chat is not None and chat.status is ChatStatus.APPROVED else None
 
 
 def _usd(microusd: int) -> str:

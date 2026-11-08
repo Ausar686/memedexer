@@ -4,9 +4,10 @@ from aiogram.exceptions import TelegramForbiddenError
 from aiogram.methods import AnswerCallbackQuery, EditMessageText, LeaveChat, SendMessage
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from memedexer.cooldown import Cooldown
 from memedexer.storage import repo
 from memedexer.storage.models import Chat, ChatStatus, Topic
-from memedexer.telegram.membership import APPROVED_NOTICE, ChatAction
+from memedexer.telegram.membership import APPROVAL_REQUEST_INTERVAL_SECONDS, APPROVED_NOTICE, ChatAction
 from tests.factories import CHAT_ID, seed_chat
 from tests.telegram.fake_api import FakeTelegram
 from tests.telegram.updates import administrator, callback_update, member_update, update
@@ -56,16 +57,10 @@ async def test_rejoin_of_approved_chat_does_not_ask_again(
     assert telegram.calls(SendMessage) == []
 
 
-@pytest.mark.parametrize("previous", [ChatStatus.REJECTED, ChatStatus.REVOKED])
-async def test_rejoin_after_reject_or_revoke_asks_again(
-    dispatcher: Dispatcher,
-    bot: Bot,
-    telegram: FakeTelegram,
-    session: AsyncSession,
-    sessionmaker: async_sessionmaker,
-    previous: ChatStatus,
+async def test_rejoin_after_revoke_asks_again(
+    dispatcher: Dispatcher, bot: Bot, telegram: FakeTelegram, session: AsyncSession, sessionmaker: async_sessionmaker
 ) -> None:
-    await seed_chat(session, status=previous)
+    await seed_chat(session, status=ChatStatus.REVOKED)
 
     await dispatcher.feed_update(bot, member_update(old="left", new="member", by=9))
 
@@ -73,6 +68,34 @@ async def test_rejoin_after_reject_or_revoke_asks_again(
     async with sessionmaker() as s:
         assert (await s.get(Chat, CHAT_ID)).added_by_user_id == 9
     assert len(telegram.calls(SendMessage)) == 1
+
+
+async def test_rejected_chat_cannot_ask_again(
+    dispatcher: Dispatcher, bot: Bot, telegram: FakeTelegram, session: AsyncSession, sessionmaker: async_sessionmaker
+) -> None:
+    await seed_chat(session, status=ChatStatus.REJECTED)
+
+    await dispatcher.feed_update(bot, member_update(old="left", new="member", by=9))
+
+    assert await chat_status(sessionmaker) is ChatStatus.REJECTED
+    assert telegram.calls(SendMessage) == []
+    [leave] = telegram.calls(LeaveChat)
+    assert leave.chat_id == CHAT_ID
+
+
+async def test_owner_is_asked_about_a_chat_at_most_once_a_day(
+    dispatcher: Dispatcher, bot: Bot, telegram: FakeTelegram, sessionmaker: async_sessionmaker
+) -> None:
+    now = [0.0]
+    dispatcher["approval_requests"] = Cooldown(APPROVAL_REQUEST_INTERVAL_SECONDS, lambda: now[0])
+
+    for update_id, moment in enumerate([0, 60, 3600, APPROVAL_REQUEST_INTERVAL_SECONDS], start=1):
+        now[0] = moment
+        await dispatcher.feed_update(bot, member_update(update_id * 2, old="member", new="left"))
+        await dispatcher.feed_update(bot, member_update(update_id * 2 + 1, old="left", new="member"))
+
+    assert await chat_status(sessionmaker) is ChatStatus.PENDING
+    assert len(telegram.calls(SendMessage)) == 2
 
 
 async def test_owner_unreachable_still_registers_chat(
@@ -175,19 +198,41 @@ async def test_only_owner_can_press_buttons(
     assert answer.show_alert is True
 
 
-async def test_chats_lists_pending_and_approved_with_actions(
+async def test_chats_lists_approved_pending_and_rejected_with_actions(
     dispatcher: Dispatcher, bot: Bot, telegram: FakeTelegram, session: AsyncSession
 ) -> None:
     await seed_chat(session, chat_id=-1, status=ChatStatus.APPROVED)
     await seed_chat(session, chat_id=-2, status=ChatStatus.PENDING)
     await seed_chat(session, chat_id=-3, status=ChatStatus.REJECTED)
+    await seed_chat(session, chat_id=-4, status=ChatStatus.REVOKED)
 
     await dispatcher.feed_update(bot, private_update(OWNER, "/chats"))
 
     [reply] = telegram.calls(SendMessage)
-    assert "-1" in reply.text and "-2" in reply.text and "-3" not in reply.text
+    assert [line.split()[0] for line in reply.text.splitlines()] == ["✅", "⏳", "🚫"]
+    assert "-4" not in reply.text
     actions = [ChatAction.unpack(row[0].callback_data) for row in reply.reply_markup.inline_keyboard]
-    assert [(a.action, a.chat_id) for a in actions] == [("revoke", -1), ("approve", -2), ("reject", -2)]
+    assert [(a.action, a.chat_id) for a in actions] == [
+        ("revoke", -1),
+        ("approve", -2),
+        ("reject", -2),
+        ("approve", -3),
+    ]
+
+
+async def test_approving_a_chat_the_bot_left_says_to_add_it_again(
+    dispatcher: Dispatcher, bot: Bot, telegram: FakeTelegram, session: AsyncSession, sessionmaker: async_sessionmaker
+) -> None:
+    await seed_chat(session, status=ChatStatus.REJECTED)
+    telegram.errors[SendMessage] = TelegramForbiddenError(SendMessage(chat_id=CHAT_ID, text=""), "bot is not a member")
+
+    await press(dispatcher, bot, "approve")
+
+    assert await chat_status(sessionmaker) is ChatStatus.APPROVED
+    [edit] = telegram.calls(EditMessageText)
+    assert edit.text.endswith(
+        "approved. Couldn't post there: if the bot left, add it to the chat again to start captioning."
+    )
 
 
 async def test_chats_is_owner_only(
