@@ -8,7 +8,7 @@ from memedexer.captioning.base import Image
 from memedexer.captioning.catalog import cost_microusd, get_model_spec
 from memedexer.captioning.registry import build_providers
 from memedexer.config import Provider, Settings
-from memedexer.pipeline.video import extract_frames
+from memedexer.pipeline.sandbox import extract_frames
 from tests import videos
 
 pytestmark = pytest.mark.live

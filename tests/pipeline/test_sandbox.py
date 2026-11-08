@@ -1,5 +1,6 @@
 import asyncio
 import io
+import pathlib
 import struct
 import sys
 
@@ -7,11 +8,13 @@ import PIL.Image
 import pytest
 
 from memedexer.captioning.base import Image
-from memedexer.pipeline import video
+from memedexer.pipeline import sandbox
 from memedexer.pipeline.frames import distinct
-from memedexer.pipeline.images import MAX_BYTES, MAX_SIDE
-from memedexer.pipeline.video import VideoError, extract_frames, read_frames
+from memedexer.pipeline.images import MAX_BYTES, MAX_SIDE, ImageError
+from memedexer.pipeline.sandbox import VideoError, extract_frames, prepare_image, read_frames
 from tests import videos
+
+MEME = pathlib.Path(__file__).parent.parent / "fixtures" / "meme.png"
 
 RED, GREEN, BLUE, WHITE = (255, 0, 0), (0, 128, 0), (0, 0, 255), (255, 255, 255)
 
@@ -39,7 +42,7 @@ def command(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, ...]]:
     monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
 
     def use(script: str) -> list[asyncio.subprocess.Process]:
-        monkeypatch.setattr(video, "_COMMAND", (sys.executable, "-c", script))
+        monkeypatch.setattr(sandbox, "_COMMAND", (sys.executable, "-c", script))
         return started
 
     return use
@@ -76,7 +79,7 @@ async def test_large_frames_are_scaled_to_the_model_limit() -> None:
 async def test_real_gifs_are_sampled() -> None:
     frames = pictures(await extract_frames(videos.gif(["red", "green", "blue", "white", "red"] * 2)))
 
-    assert 1 < len(frames) <= len(video.FRAME_POSITIONS)
+    assert 1 < len(frames) <= len(sandbox.FRAME_POSITIONS)
 
 
 async def test_text_survives_into_the_frames() -> None:
@@ -90,10 +93,10 @@ async def test_text_survives_into_the_frames() -> None:
 @pytest.mark.parametrize(
     ("data", "message"),
     [
-        (b"not a video", "cannot decode video: av.error.InvalidDataError"),
-        (b"", "cannot decode video: av.error.InvalidDataError"),
-        (videos.audio_only(), "cannot decode video: ValueError: no video stream"),
-        (videos.clip(["red"], container="nut"), "cannot decode video: ValueError: unsupported container format"),
+        (b"not a video", "^cannot decode video: Invalid data found when processing input$"),
+        (b"", "^cannot decode video: Invalid data found when processing input$"),
+        (videos.audio_only(), "^cannot decode video: no video stream$"),
+        (videos.clip(["red"], container="nut"), "^cannot decode video: unsupported container format$"),
     ],
     ids=["garbage", "empty", "audio-only", "unsupported-container"],
 )
@@ -104,7 +107,7 @@ async def test_undecodable_input_is_a_video_error(data: bytes, message: str) -> 
 
 async def test_a_hanging_decoder_is_killed(command, monkeypatch: pytest.MonkeyPatch) -> None:
     started = command("import time; time.sleep(60)")
-    monkeypatch.setattr(video, "DECODE_TIMEOUT_SECONDS", 0.2)
+    monkeypatch.setattr(sandbox, "DECODE_TIMEOUT_SECONDS", 0.2)
 
     with pytest.raises(VideoError, match="took longer than 0 s"):
         await extract_frames(b"video")
@@ -145,7 +148,7 @@ async def test_cancelling_the_job_kills_the_decoder(command) -> None:
 async def test_duration_hint_is_passed_to_the_decoder(command) -> None:
     command("import sys; sys.stderr.write(' '.join(sys.argv[1:])); sys.exit(1)")
 
-    with pytest.raises(VideoError, match="--duration 12.0"):
+    with pytest.raises(VideoError, match="video --duration 12.0$"):
         await extract_frames(b"video", 12.0)
 
 
@@ -171,7 +174,7 @@ async def test_processes_the_decoder_starts_are_killed_with_it(command, monkeypa
     # The grandchild inherits the pipes; if it survived, reading them would never end.
     command("import subprocess, sys, time; subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); "
             "time.sleep(60)")
-    monkeypatch.setattr(video, "DECODE_TIMEOUT_SECONDS", 0.5)
+    monkeypatch.setattr(sandbox, "DECODE_TIMEOUT_SECONDS", 0.5)
 
     with pytest.raises(VideoError, match="took longer"):
         await asyncio.wait_for(extract_frames(b"video"), 5)
@@ -191,6 +194,62 @@ async def test_a_decoder_that_ignores_its_input_is_not_an_error_by_itself(comman
         await extract_frames(bytes(10 << 20))
 
 
+async def test_small_image_comes_back_as_sent() -> None:
+    image = await prepare_image(MEME.read_bytes())
+
+    assert (image.data, image.media_type) == (MEME.read_bytes(), "image/png")
+
+
+async def test_large_image_comes_back_as_a_fitted_jpeg() -> None:
+    out = io.BytesIO()
+    PIL.Image.new("RGB", (4000, 2000), "red").save(out, format="PNG")
+
+    [picture] = pictures([await prepare_image(out.getvalue())])
+
+    assert picture.size == (MAX_SIDE, MAX_SIDE // 2)
+
+
+async def test_image_bomb_fails_in_the_child() -> None:
+    out = io.BytesIO()
+    PIL.Image.new("1", (12000, 12000)).save(out, format="PNG", optimize=True)
+
+    with pytest.raises(ImageError, match=r"^cannot decode image: image is too large \(12000×12000 pixels\)$"):
+        await prepare_image(out.getvalue())
+
+
+async def test_undecodable_image_is_an_image_error() -> None:
+    with pytest.raises(ImageError, match="^cannot decode image: not a JPEG, PNG or WebP image$"):
+        await prepare_image(b"GIF89a")
+
+
+async def test_image_decoder_gets_no_arguments_beyond_its_mode(command) -> None:
+    command("import sys; sys.stderr.write(' '.join(sys.argv[1:])); sys.exit(1)")
+
+    with pytest.raises(ImageError, match="cannot decode image: image$"):
+        await prepare_image(b"image")
+
+
+@pytest.mark.parametrize(
+    ("output", "media_type"),
+    [
+        (b"\xff\xd8\xffjpeg", "image/jpeg"),
+        (b"\x89PNG\r\n\x1a\npng", "image/png"),
+        (b"RIFF\0\0\0\0WEBPVP8 ", "image/webp"),
+    ],
+)
+async def test_output_type_is_read_from_its_signature(command, output: bytes, media_type: str) -> None:
+    command(f"import sys; sys.stdout.buffer.write({frame_bytes(output)!r})")
+
+    assert await prepare_image(b"image") == Image(output, media_type)
+
+
+async def test_output_that_is_not_an_image_is_refused(command) -> None:
+    command(f"import sys; sys.stdout.buffer.write({frame_bytes(b'<svg/>')!r})")
+
+    with pytest.raises(ImageError, match="decoder output is not an image"):
+        await prepare_image(b"image")
+
+
 def frame_bytes(*frames: bytes) -> bytes:
     return b"".join(struct.pack(">I", len(frame)) + frame for frame in frames)
 
@@ -205,13 +264,13 @@ def test_read_frames_round_trips() -> None:
         (frame_bytes(b"abc")[:-1], "malformed"),
         (b"\x00\x00", "truncated"),
         (struct.pack(">I", MAX_BYTES + 1), "malformed"),
-        (frame_bytes(*[b"x"] * 4), "returned 4 frames"),
-        (b"", "returned 0 frames"),
+        (frame_bytes(*[b"x"] * 4), "returned 4 pictures"),
+        (b"", "returned 0 pictures"),
     ],
     ids=["short-frame", "short-length", "oversized", "too-many", "none"],
 )
 def test_read_frames_rejects_what_a_well_behaved_decoder_cannot_produce(output: bytes, message: str) -> None:
-    with pytest.raises(VideoError, match=message):
+    with pytest.raises(ValueError, match=message):
         read_frames(output)
 
 

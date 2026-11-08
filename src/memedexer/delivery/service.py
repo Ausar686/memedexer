@@ -28,7 +28,8 @@ from memedexer.config import Settings
 from memedexer.delivery.format import format_caption
 from memedexer.delivery.throttle import Throttle
 from memedexer.pipeline import budget
-from memedexer.pipeline.images import ImageError, prepare_image
+from memedexer.pipeline.images import ImageError
+from memedexer.pipeline.sandbox import prepare_image
 from memedexer.pipeline.worker import Downloader, DownloadError, over_download_limit
 from memedexer.redaction import redact
 from memedexer.storage import repo
@@ -341,7 +342,7 @@ class Delivery:
     async def _upload_image(self, media: Media) -> InputFile:
         """Image documents can't be re-sent as photos by file id, so upload the prepared image once."""
         data = await self._downloader.download(media.file_id)
-        image = await asyncio.to_thread(prepare_image, data, media.mime_type)
+        image = await prepare_image(data)
         extension = image.media_type.removeprefix("image/")
         return BufferedInputFile(image.data, filename=f"{media.file_unique_id}.{extension}")
 
