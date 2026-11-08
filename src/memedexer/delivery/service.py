@@ -216,7 +216,7 @@ class Delivery:
             chat = await session.get(Chat, job.chat_id)
             caption = await session.get(Caption, job.caption_id)
             media = await session.get(Media, job.file_unique_id)
-        if _goes_back_as_document(job, media):
+        if _goes_back_as_document(media):
             log.warning("reply of job %d is a document and can't be hidden", job_id)
             return None
 
@@ -275,7 +275,7 @@ class Delivery:
                 return InputMediaPhoto(media=photo, has_spoiler=spoiler, **common)
             case MediaType.ANIMATION:
                 return InputMediaAnimation(media=media.reply_file_id, has_spoiler=spoiler, **common)
-            case MediaType.VIDEO_DOCUMENT if _goes_back_as_document(job, media):
+            case MediaType.VIDEO_DOCUMENT if _goes_back_as_document(media):
                 return InputMediaDocument(media=media.file_id, **common)
             case MediaType.VIDEO | MediaType.VIDEO_DOCUMENT:
                 video = media.reply_file_id or await self._upload_video(media)
@@ -302,7 +302,7 @@ class Delivery:
                     return await self._bot.send_animation(
                         animation=media.reply_file_id, has_spoiler=job.has_spoiler, **reply
                     )
-                case MediaType.VIDEO_DOCUMENT if _goes_back_as_document(job, media):
+                case MediaType.VIDEO_DOCUMENT if _goes_back_as_document(media):
                     await self._throttle.wait(job.chat_id)
                     return await self._bot.send_document(document=media.file_id, **reply)
                 case MediaType.VIDEO | MediaType.VIDEO_DOCUMENT:
@@ -398,7 +398,7 @@ def _caption_html(caption: Caption, *, spoiler: bool) -> str:
     return format_caption(caption.text, caption.description, caption.tags, spoiler=spoiler)
 
 
-def _goes_back_as_document(job: Job, media: Media) -> bool:
+def _goes_back_as_document(media: Media) -> bool:
     """A video document too big to download and re-upload as a video goes back as the file it came as."""
     return (
         media.media_type is MediaType.VIDEO_DOCUMENT
