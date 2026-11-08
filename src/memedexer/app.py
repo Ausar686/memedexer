@@ -48,7 +48,7 @@ async def run(settings: Settings) -> None:
         downloader=downloader,
         listener=delivery,
     )
-    dispatcher = build_dispatcher(sessionmaker=sessionmaker, worker=worker, settings=settings)
+    dispatcher = build_dispatcher(sessionmaker=sessionmaker, worker=worker, delivery=delivery, settings=settings)
     await prepare_bot(bot, settings)
     await delivery.start()
 

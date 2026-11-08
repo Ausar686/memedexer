@@ -94,3 +94,36 @@ async def test_0004_backfills_photo_file_ids(database_url: str) -> None:
         rows = dict((await connection.execute(sa.text("SELECT file_unique_id, photo_file_id FROM media"))).all())
     await engine.dispose()
     assert rows == {"photo": "photo-file", "doc": None}
+
+
+async def test_0005_marks_existing_jobs_as_not_spoilers(database_url: str) -> None:
+    engine = db.create_engine(database_url)
+    await db.upgrade(engine, "0004")
+    async with engine.begin() as connection:
+        await connection.execute(
+            sa.text(
+                "INSERT INTO chats (id, is_forum, status, created_at, updated_at) "
+                "VALUES (-1, 0, 'approved', '2026-10-01 00:00:00', '2026-10-01 00:00:00')"
+            )
+        )
+        await connection.execute(
+            sa.text(
+                "INSERT INTO media (file_unique_id, file_id, mime_type, created_at) "
+                "VALUES ('u', 'f', 'image/jpeg', '2026-10-01 00:00:00')"
+            )
+        )
+        await connection.execute(
+            sa.text(
+                "INSERT INTO jobs (chat_id, thread_id, message_id, file_unique_id, trigger, status, attempts, "
+                "input_tokens, output_tokens, cost_microusd, available_at, created_at, updated_at) "
+                "VALUES (-1, 0, 1, 'u', 'message', 'done', 1, 0, 0, 0, "
+                "'2026-10-01 00:00:00', '2026-10-01 00:00:00', '2026-10-01 00:00:00')"
+            )
+        )
+
+    await db.upgrade(engine)
+
+    async with engine.connect() as connection:
+        has_spoiler = await connection.scalar(sa.text("SELECT has_spoiler FROM jobs"))
+    await engine.dispose()
+    assert has_spoiler == 0

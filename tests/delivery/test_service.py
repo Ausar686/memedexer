@@ -7,8 +7,8 @@ from aiogram import Bot
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError, TelegramRetryAfter
-from aiogram.methods import SendMessage, SendPhoto
-from aiogram.types import BufferedInputFile
+from aiogram.methods import EditMessageMedia, SendMessage, SendPhoto
+from aiogram.types import BufferedInputFile, InputMediaPhoto
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from memedexer.config import Provider, Settings
@@ -76,8 +76,10 @@ async def captioned_job(
     thread_id: int = THREAD_ID,
     file_unique_id: str = "uniq",
     photo_file_id: str | None = "photo-file",
+    has_spoiler: bool = False,
 ) -> Job:
     job = await seed_job(session, message_id=message_id, thread_id=thread_id, file_unique_id=file_unique_id)
+    job.has_spoiler = has_spoiler
     media = await session.get(Media, file_unique_id)
     media.photo_file_id = photo_file_id
     caption = Caption(
@@ -131,6 +133,116 @@ async def test_chat_without_topics_has_no_thread(
     await delivery.deliver(job.id)
 
     assert telegram.calls(SendPhoto)[0].message_thread_id is None
+
+
+SPOILER_CAPTION = (
+    "<blockquote expandable><tg-spoiler>WHEN ALL TESTS PASS</tg-spoiler></blockquote>\n"
+    "<tg-spoiler>A smiley face. It smiles.</tg-spoiler>\n"
+    "<tg-spoiler>#tests</tg-spoiler>"
+)
+
+
+async def test_spoiler_reply_hides_image_and_caption(
+    delivery: Delivery, telegram: FakeTelegram, session: AsyncSession
+) -> None:
+    await seed_chat(session)
+    job = await captioned_job(session, has_spoiler=True)
+
+    await delivery.deliver(job.id)
+
+    [sent] = telegram.calls(SendPhoto)
+    assert sent.has_spoiler is True
+    assert sent.caption == SPOILER_CAPTION
+
+
+async def test_hide_replies_blurs_posted_replies_and_flags_pending_ones(
+    delivery: Delivery, telegram: FakeTelegram, session: AsyncSession, sessionmaker: async_sessionmaker
+) -> None:
+    await seed_chat(session)
+    posted = await captioned_job(session)
+    pending = await captioned_job(session)
+    other = await captioned_job(session, message_id=101)
+    await delivery.deliver(posted.id)
+    await delivery.deliver(other.id)
+
+    await delivery.hide_replies(CHAT_ID, 100)
+    await delivery.hide_replies(CHAT_ID, 100)
+
+    [edit] = telegram.calls(EditMessageMedia)
+    assert (edit.chat_id, edit.message_id) == (CHAT_ID, (await load_job(sessionmaker, posted.id)).reply_message_id)
+    assert (edit.media.media, edit.media.has_spoiler, edit.media.caption) == ("photo-file", True, SPOILER_CAPTION)
+    assert edit.media.parse_mode == ParseMode.HTML
+    assert [(await load_job(sessionmaker, j.id)).has_spoiler for j in (posted, pending, other)] == [True, True, False]
+
+    await delivery.deliver(pending.id)
+    assert telegram.calls(SendPhoto)[-1].has_spoiler is True
+
+
+async def test_reply_sent_while_the_source_became_a_spoiler_is_hidden(
+    bot: Bot,
+    telegram: FakeTelegram,
+    sessionmaker: async_sessionmaker,
+    settings: Settings,
+    downloader: FakeDownloader,
+    sleeps: Sleeps,
+    session: AsyncSession,
+) -> None:
+    class SpoilerDuringSend:
+        """hide_replies ran after the job was read but before its reply id was stored, so it couldn't blur it."""
+
+        async def wait(self, chat_id: int) -> None:
+            async with sessionmaker() as s:
+                (await s.get(Job, job.id)).has_spoiler = True
+                await s.commit()
+
+    delivery = Delivery(
+        bot=bot,
+        sessionmaker=sessionmaker,
+        settings=settings,
+        downloader=downloader,
+        throttle=SpoilerDuringSend(),
+        sleep=sleeps,
+    )
+    await seed_chat(session)
+    job = await captioned_job(session)
+
+    await delivery.deliver(job.id)
+
+    assert telegram.calls(SendPhoto)[0].has_spoiler is False
+    [edit] = telegram.calls(EditMessageMedia)
+    assert (edit.message_id, edit.media.has_spoiler) == (1000, True)
+
+
+async def test_failing_to_hide_a_reply_alerts_the_owner(
+    delivery: Delivery, telegram: FakeTelegram, session: AsyncSession
+) -> None:
+    await seed_chat(session)
+    job = await captioned_job(session)
+    await delivery.deliver(job.id)
+    request = EditMessageMedia(media=InputMediaPhoto(media="x"))
+    telegram.errors[EditMessageMedia] = TelegramNetworkError(request, "connection reset")
+
+    await delivery.hide_replies(CHAT_ID, 100)
+
+    assert len(telegram.calls(EditMessageMedia)) == MAX_SEND_ATTEMPTS
+    [alert] = telegram.calls(SendMessage)
+    assert alert.chat_id == OWNER
+    assert "Couldn't hide a spoiler reply" in alert.text
+
+
+async def test_deleted_reply_is_skipped_without_an_alert(
+    delivery: Delivery, telegram: FakeTelegram, session: AsyncSession
+) -> None:
+    await seed_chat(session)
+    job = await captioned_job(session)
+    await delivery.deliver(job.id)
+    request = EditMessageMedia(media=InputMediaPhoto(media="x"))
+    telegram.errors[EditMessageMedia] = TelegramBadRequest(request, "message to edit not found")
+
+    await delivery.hide_replies(CHAT_ID, 100)
+
+    assert len(telegram.calls(EditMessageMedia)) == 1
+    assert telegram.calls(SendMessage) == []
 
 
 async def test_document_is_uploaded_once_then_reused(

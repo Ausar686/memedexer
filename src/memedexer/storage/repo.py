@@ -109,10 +109,22 @@ async def latest_caption(session: AsyncSession, file_unique_id: str) -> Caption 
 
 
 async def enqueue_job(
-    session: AsyncSession, *, chat_id: int, thread_id: int, message_id: int, file_unique_id: str, trigger: JobTrigger
+    session: AsyncSession,
+    *,
+    chat_id: int,
+    thread_id: int,
+    message_id: int,
+    file_unique_id: str,
+    trigger: JobTrigger,
+    has_spoiler: bool = False,
 ) -> Job:
     job = Job(
-        chat_id=chat_id, thread_id=thread_id, message_id=message_id, file_unique_id=file_unique_id, trigger=trigger
+        chat_id=chat_id,
+        thread_id=thread_id,
+        message_id=message_id,
+        file_unique_id=file_unique_id,
+        trigger=trigger,
+        has_spoiler=has_spoiler,
     )
     session.add(job)
     await session.flush()
@@ -185,6 +197,11 @@ async def latest_job_for_message(session: AsyncSession, chat_id: int, message_id
         .limit(1)
     )
     return await session.scalar(query)
+
+
+async def jobs_for_message(session: AsyncSession, chat_id: int, message_id: int) -> list[Job]:
+    query = sa.select(Job).where(Job.chat_id == chat_id, Job.message_id == message_id).order_by(Job.id)
+    return list(await session.scalars(query))
 
 
 async def undelivered_jobs(session: AsyncSession, since: dt.datetime) -> list[Job]:

@@ -222,6 +222,7 @@ async def recaption(
             message_id=target.message_id,
             file_unique_id=image.file_unique_id,
             trigger=JobTrigger.RECAPTION,
+            has_spoiler=bool(target.has_media_spoiler),
         )
         await session.commit()
     worker.notify()

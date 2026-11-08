@@ -12,10 +12,13 @@ are built per dispatcher (`build_*_router`) and wired in `app.build_dispatcher`.
 - Topic: `message_thread_id` when `is_topic_message` is set, otherwise
   `NO_TOPIC`. Reply threads in ordinary groups also carry a thread id, so the
   flag matters.
+- Each job records the message's `has_media_spoiler`, so its reply is a
+  spoiler too (`/recaption` takes it from the replied message).
 - Edits enqueue an `edit` job only when the image changed (a different
-  `file_unique_id` than the message's latest job).
-- Handlers receive `sessionmaker` and `worker` from the dispatcher context
-  (`app.build_dispatcher`).
+  `file_unique_id` than the message's latest job). An edit that keeps the
+  image but adds a spoiler calls `delivery.hide_replies` instead.
+- Handlers receive `sessionmaker`, `worker` and `delivery` from the dispatcher
+  context (`app.build_dispatcher`).
 
 ## Which file ([media.py](media.py))
 - Photos: the largest size whose longer side fits `pipeline.images.MAX_SIDE`,

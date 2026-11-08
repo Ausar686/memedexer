@@ -157,6 +157,8 @@ class Job(Timestamped, Base):
     message_id: orm.Mapped[int]
     file_unique_id: orm.Mapped[str] = orm.mapped_column(sa.ForeignKey("media.file_unique_id"))
     trigger: orm.Mapped[JobTrigger]
+    # The source message's media spoiler; replies to it must hide the image and caption too.
+    has_spoiler: orm.Mapped[bool] = orm.mapped_column(default=False, server_default=sa.false())
     status: orm.Mapped[JobStatus] = orm.mapped_column(default=JobStatus.PENDING)
     attempts: orm.Mapped[int] = orm.mapped_column(default=0)
     error: orm.Mapped[str | None] = orm.mapped_column(sa.Text)

@@ -53,9 +53,13 @@ update (photo / image document) in an approved chat
   photo caption to 1024 characters: tags are always kept, the description is
   cut to its first sentence, then the OCR text is truncated with `…`, then the
   description. The full caption is always stored in the database.
+- **Spoilers:** a reply to an image sent as a spoiler is a spoiler too: the
+  image is blurred and the OCR text, description and tags are hidden, since
+  they give the image away just as much.
 - **Edits:** when an edit replaces the image, the new image is captioned and a
   new reply posted; the previous reply stays. Edits that keep the image are
-  ignored.
+  ignored, except one that adds a spoiler: the replies already posted are
+  blurred. Removing a spoiler leaves the replies hidden.
 - **Rate limits:** replies go through a per-chat send queue, since Telegram
   allows bots about 20 messages per minute per group.
 - **Budgets:** per-chat spend limits from `.env` (defaults: $20 daily, $100
