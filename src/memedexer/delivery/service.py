@@ -321,7 +321,13 @@ class Delivery:
                 case MediaType.PHOTO | MediaType.IMAGE_DOCUMENT:
                     photo = media.reply_file_id or await self._upload_image(media)
                     await self._throttle.wait(job.chat_id)
-                    return await self._bot.send_photo(photo=photo, has_spoiler=job.has_spoiler, **reply)
+                    try:
+                        return await self._bot.send_photo(photo=photo, has_spoiler=job.has_spoiler, **reply)
+                    except TelegramBadRequest as exc:
+                        # Photos are limited to a 20:1 side ratio; a long strip sent as a file goes back as one.
+                        if media.media_type is MediaType.PHOTO or "photo_invalid_dimensions" not in exc.message.lower():
+                            raise
+                    return await self._send_file(job, media.file_id, reply)
                 case MediaType.ANIMATION:
                     await self._throttle.wait(job.chat_id)
                     return await self._bot.send_animation(
