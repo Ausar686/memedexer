@@ -1,5 +1,6 @@
 """Chat lifecycle: owner approval of new chats via DM, revocation, removal and group→supergroup migration."""
 
+import collections.abc as cabc
 import html
 import logging
 
@@ -12,6 +13,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from memedexer.config import Settings
+from memedexer.cooldown import Cooldown
 from memedexer.storage import repo
 from memedexer.storage.models import Chat, ChatStatus
 
@@ -20,12 +22,19 @@ log = logging.getLogger(__name__)
 _in_group = F.chat.type.in_({"group", "supergroup"})
 _in_private = F.chat.type == "private"
 
+# Leaving and re-adding the bot would otherwise DM the owner every time.
+APPROVAL_REQUEST_INTERVAL_SECONDS = 24 * 60 * 60
+
 APPROVED_NOTICE = (
     "✅ This chat is approved for meme captioning.\n"
     "Admins: send <code>/captions on</code> in a topic to caption images posted there; "
     "<code>/settings</code> shows the current setup.\n"
     "Images from enabled topics are sent to a third-party AI provider (Anthropic or OpenAI) to generate captions."
 )
+
+
+# Rejected chats are listed so the owner can still approve one; it can't ask again from the chat itself.
+_LISTED = {ChatStatus.APPROVED: "✅", ChatStatus.PENDING: "⏳", ChatStatus.REJECTED: "🚫"}
 
 
 class ChatAction(CallbackData, prefix="chat"):
@@ -68,8 +77,13 @@ async def notify_owner(bot: Bot, settings: Settings, text: str, markup: InlineKe
 
 
 async def bot_joined(
-    event: ChatMemberUpdated, bot: Bot, sessionmaker: async_sessionmaker[AsyncSession], settings: Settings
+    event: ChatMemberUpdated,
+    bot: Bot,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    approval_requests: Cooldown,
 ) -> None:
+    """Ask the owner about a new chat, at most once a day per chat; a rejected chat can't ask again."""
     async with sessionmaker() as session:
         chat = await repo.upsert_chat(
             session,
@@ -78,12 +92,18 @@ async def bot_joined(
             is_forum=bool(event.chat.is_forum),
             added_by_user_id=event.from_user.id,
         )
-        if chat.status is ChatStatus.APPROVED:
+        if chat.status in (ChatStatus.APPROVED, ChatStatus.REJECTED):
             await session.commit()
+            if chat.status is ChatStatus.REJECTED:
+                log.info("leaving rejected chat %d; the owner can approve it from /chats", chat.id)
+                await _send_quietly(bot.leave_chat(chat.id))
             return
         chat.added_by_user_id = event.from_user.id
         chat.status = ChatStatus.PENDING
         await session.commit()
+    if not approval_requests.ready(chat.id):
+        log.info("chat %d asked for approval again within a day; it's listed in /chats", chat.id)
+        return
     adder = html.escape(event.from_user.full_name)
     await notify_owner(
         bot,
@@ -131,19 +151,20 @@ async def list_chats(message: Message, sessionmaker: async_sessionmaker[AsyncSes
     if message.from_user is None or message.from_user.id != settings.owner_user_id:
         return
     async with sessionmaker() as session:
-        chats = [c for c in await repo.list_chats(session) if c.status in (ChatStatus.APPROVED, ChatStatus.PENDING)]
+        chats = [c for c in await repo.list_chats(session) if c.status in _LISTED]
     if not chats:
-        await message.answer("No approved or pending chats.")
+        await message.answer("No approved, pending or rejected chats.")
         return
     keyboard = InlineKeyboardBuilder()
     lines = []
     for chat in chats:
-        lines.append(f"{'✅' if chat.status is ChatStatus.APPROVED else '⏳'} {describe_chat(chat)}")
+        lines.append(f"{_LISTED[chat.status]} {describe_chat(chat)}")
         title = (chat.title or str(chat.id))[:24]
         if chat.status is ChatStatus.APPROVED:
             keyboard.button(text=f"Revoke {title}", callback_data=ChatAction(action="revoke", chat_id=chat.id))
-        else:
-            keyboard.button(text=f"Approve {title}", callback_data=ChatAction(action="approve", chat_id=chat.id))
+            continue
+        keyboard.button(text=f"Approve {title}", callback_data=ChatAction(action="approve", chat_id=chat.id))
+        if chat.status is ChatStatus.PENDING:
             keyboard.button(text=f"Reject {title}", callback_data=ChatAction(action="reject", chat_id=chat.id))
     keyboard.adjust(1)
     await message.answer("\n".join(lines), reply_markup=keyboard.as_markup())
@@ -176,19 +197,24 @@ async def on_chat_action(
                 return
         await session.commit()
 
+    outcome = {ChatStatus.APPROVED: "approved", ChatStatus.REJECTED: "rejected", ChatStatus.REVOKED: "revoked"}
+    summary = f"{describe_chat(chat)}: {outcome[chat.status]}."
     if chat.status is ChatStatus.APPROVED:
-        await _send_quietly(bot.send_message(chat.id, APPROVED_NOTICE))
+        if not await _send_quietly(bot.send_message(chat.id, APPROVED_NOTICE)):
+            # Typically a chat rejected earlier, which the bot left.
+            summary += " Couldn't post there: if the bot left, add it to the chat again to start captioning."
     else:
         await _send_quietly(bot.leave_chat(chat.id))
-    outcome = {ChatStatus.APPROVED: "approved", ChatStatus.REJECTED: "rejected", ChatStatus.REVOKED: "revoked"}
     await query.answer(f"Chat {outcome[chat.status]}.")
     if isinstance(query.message, Message):
-        await _send_quietly(query.message.edit_text(f"{describe_chat(chat)}: {outcome[chat.status]}."))
+        await _send_quietly(query.message.edit_text(summary))
 
 
-async def _send_quietly(call: object) -> None:
-    """The chat or DM may be gone already; the status change in the database is what matters."""
+async def _send_quietly(call: cabc.Awaitable[object]) -> bool:
+    """The chat or DM may be gone already; the status change in the database is what matters. False on failure."""
     try:
         await call
     except TelegramAPIError as exc:
         log.warning("telegram call failed: %s", exc)
+        return False
+    return True
