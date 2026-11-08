@@ -49,7 +49,10 @@ async def test_errors_are_classified(error: Exception, retryable: bool) -> None:
     assert excinfo.value.retryable is retryable
 
 
-@pytest.mark.parametrize(("message", "too_big"), [("Bad Request: file is too big", True), ("wrong file_id", False)])
+@pytest.mark.parametrize(
+    ("message", "too_big"),
+    [("Bad Request: file is too big", True), ("Bad Request: File is too big", True), ("wrong file_id", False)],
+)
 async def test_files_over_the_limit_are_marked(message: str, too_big: bool) -> None:
     with pytest.raises(DownloadError) as excinfo:
         await BotDownloader(FakeBot(TelegramBadRequest(GetFile(file_id="f"), message))).download("f")
