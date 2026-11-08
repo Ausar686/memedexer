@@ -1,5 +1,7 @@
 """Video sampling, run in-process; `test_sandbox` covers it through the real child process."""
 
+import fractions
+
 import PIL.Image
 import pytest
 
@@ -80,3 +82,14 @@ def test_a_one_second_mpeg_ts_clip_has_a_frame() -> None:
 def test_other_codecs_are_refused() -> None:
     with pytest.raises(ValueError, match="^unsupported video codec ffv1$"):
         frames.sample_frames(videos.clip(["red"], container="matroska", codec="ffv1"))
+
+
+@pytest.mark.parametrize(
+    ("aspect", "size"),
+    [(fractions.Fraction(2), (320, 120)), (fractions.Fraction(1, 2), (80, 120)), (fractions.Fraction(100), (640, 120))],
+    ids=["wide-pixels", "narrow-pixels", "crafted-ratio-is-clamped"],
+)
+def test_anamorphic_video_is_shown_at_its_display_shape(aspect: fractions.Fraction, size: tuple[int, int]) -> None:
+    [picture] = frames.sample_frames(videos.clip(["red"], size=(160, 120), pixel_aspect=aspect))
+
+    assert picture.size == size

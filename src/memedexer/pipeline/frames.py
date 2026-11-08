@@ -18,6 +18,8 @@ DECODERS = (
     "h264", "hevc", "vp8", "vp9", "libvpx", "libvpx-vp9", "av1", "libdav1d", "mpeg4", "mpeg1video", "mpeg2video",
     "h263", "flv", "msmpeg4", "msmpeg4v1", "msmpeg4v2", "wmv1", "wmv2", "wmv3", "vc1", "mjpeg", "gif",
 )
+# Anamorphic video stretches pixels by a small ratio (e.g. 4:3 or 32:27); anything wilder is a crafted file.
+MAX_PIXEL_ASPECT = 4.0
 # Mean per-channel difference (0-255) between 16×16 colour thumbnails below which two frames show the same picture,
 # e.g. a still image with music. Colour, since different hues can share a grayscale level.
 DUPLICATE_THRESHOLD = 6.0
@@ -102,6 +104,12 @@ def _start(container: av.container.InputContainer, stream: av.VideoStream) -> fl
     return 0.0
 
 
+def _pixel_aspect(stream: av.VideoStream) -> float:
+    """Width of a pixel relative to its height; anamorphic video stores wider or narrower pixels than it shows."""
+    ratio = stream.sample_aspect_ratio or stream.codec_context.sample_aspect_ratio
+    return min(max(float(ratio), 1 / MAX_PIXEL_ASPECT), MAX_PIXEL_ASPECT) if ratio else 1.0
+
+
 def _duration(container: av.container.InputContainer, stream: av.VideoStream) -> float | None:
     if stream.duration is not None:
         return float(stream.duration * stream.time_base)
@@ -123,7 +131,7 @@ def _seek_picture(
             raise InexactSeek
         if frame.time >= target:
             break
-    return None if frame is None else _upright(frame)
+    return None if frame is None else _upright(frame, _pixel_aspect(stream))
 
 
 def _scan(data: bytes, offsets: list[float]) -> list[PIL.Image.Image]:
@@ -133,24 +141,25 @@ def _scan(data: bytes, offsets: list[float]) -> list[PIL.Image.Image]:
     last = None
     with _open(data) as container:
         stream = _video_stream(container)
-        start = _start(container, stream)
+        start, aspect = _start(container, stream), _pixel_aspect(stream)
         rate = stream.guessed_rate or stream.average_rate
         for index, frame in enumerate(container.decode(stream)):
             last = frame
             time = frame.time - start if frame.time is not None else (float(index / rate) if rate else None)
             while pending and (time is None or time >= pending[0]):
-                pictures.append(_upright(frame))
+                pictures.append(_upright(frame, aspect))
                 pending.pop(0)
             if not pending:
                 break
         if pending and last is not None:
-            pictures.append(_upright(last))
+            pictures.append(_upright(last, aspect))
     return pictures
 
 
-def _upright(frame: av.VideoFrame) -> PIL.Image.Image:
+def _upright(frame: av.VideoFrame, pixel_aspect: float) -> PIL.Image.Image:
+    width = frame.width * pixel_aspect
     # Scale while converting so a huge frame never exists as a full-size RGB picture.
-    scale = min(1.0, MAX_SIDE / max(frame.width, frame.height))
-    picture = frame.to_image(width=max(1, round(frame.width * scale)), height=max(1, round(frame.height * scale)))
+    scale = min(1.0, MAX_SIDE / max(width, frame.height))
+    picture = frame.to_image(width=max(1, round(width * scale)), height=max(1, round(frame.height * scale)))
     # Phones store portrait video sideways plus a display rotation, counter-clockwise in degrees.
     return picture.rotate(frame.rotation, expand=True) if frame.rotation else picture
