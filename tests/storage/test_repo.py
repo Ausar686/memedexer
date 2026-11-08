@@ -116,6 +116,29 @@ async def test_requeue_interrupted_jobs(session: AsyncSession) -> None:
     assert claimed is not None and claimed.id == job.id and claimed.attempts == 2
 
 
+async def test_fail_exhausted_interrupted_jobs_spares_jobs_with_attempts_left(session: AsyncSession) -> None:
+    await _chat(session)
+    await _media(session)
+    exhausted = await _job(session, message_id=1)
+    spared = await _job(session, message_id=2)
+    waiting = await _job(session, message_id=3)
+    for _ in range(2):
+        await repo.claim_next_job(session)
+    exhausted.attempts = 3
+    await session.flush()
+
+    failed = await repo.fail_exhausted_interrupted_jobs(session, max_attempts=3)
+
+    assert [job.id for job in failed] == [exhausted.id]
+    assert (exhausted.status, exhausted.error) == (
+        JobStatus.FAILED,
+        "interrupted on attempt 3; it may crash the process",
+    )
+    assert exhausted.finished_at is not None
+    assert (spared.status, waiting.status) == (JobStatus.RUNNING, JobStatus.PENDING)
+    assert await repo.requeue_interrupted_jobs(session) == 1
+
+
 async def test_finish_job_rejects_non_terminal_status(session: AsyncSession) -> None:
     await _chat(session)
     await _media(session)

@@ -27,8 +27,9 @@ migrations in [db.py](db.py).
   (`UTCDateTime`); binding a naive datetime raises.
 - `file_id` changes over time for the same file; `upsert_media` keeps the
   latest one.
-- A crashed process may leave jobs `running`; `requeue_interrupted_jobs` puts
-  them back to `pending` at startup.
+- A crashed process may leave jobs `running`; at startup
+  `fail_exhausted_interrupted_jobs` fails those on their last attempt, then
+  `requeue_interrupted_jobs` puts the rest back to `pending`.
 - Helpers flush but never commit; the caller owns the transaction.
 
 ## Migrations

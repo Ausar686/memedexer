@@ -319,6 +319,30 @@ async def test_run_requeues_interrupted_jobs(
     assert (await load_job(sessionmaker, job.id)).status is JobStatus.DONE
 
 
+async def test_run_fails_a_job_interrupted_on_its_last_attempt(
+    session: AsyncSession, sessionmaker: async_sessionmaker[AsyncSession], settings: Settings
+) -> None:
+    await seed_chat(session)
+    job = await seed_job(session)
+    for _ in range(MAX_ATTEMPTS - 1):
+        await repo.claim_next_job(session)
+        await repo.requeue_interrupted_jobs(session)
+    await repo.claim_next_job(session)
+    await session.commit()
+    provider, listener = FakeProvider(caption_result()), SpyListener()
+    settings.worker_concurrency = 1
+    worker = make_worker(sessionmaker, settings, provider, listener=listener)
+
+    worker.stop()
+    await asyncio.wait_for(worker.run(), 5)
+
+    failed = await load_job(sessionmaker, job.id)
+    assert (failed.status, failed.attempts) == (JobStatus.FAILED, MAX_ATTEMPTS)
+    assert failed.error.startswith(f"interrupted on attempt {MAX_ATTEMPTS};")
+    assert listener.finished == [(job.id, JobStatus.FAILED)]
+    assert provider.calls == []
+
+
 async def test_stop_lets_the_current_job_finish(
     session: AsyncSession, sessionmaker: async_sessionmaker[AsyncSession], settings: Settings
 ) -> None:
