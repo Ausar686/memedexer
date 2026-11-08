@@ -609,6 +609,35 @@ async def test_deleted_original_is_given_up_silently(
     assert telegram.calls(SendMessage) == []
 
 
+@pytest.mark.parametrize(
+    ("description", "alert"),
+    [
+        ("Bad Request: message to be replied not found", False),
+        ("Bad Request: TOPIC_CLOSED", False),
+        ("Bad Request: message thread not found", False),
+        ("Bad Request: can't parse entities: unclosed tag", True),
+        ("Bad Request: wrong file identifier/HTTP URL specified", True),
+        ("Bad Request: not enough rights to send photos to the chat", True),
+    ],
+)
+async def test_only_rejections_for_a_gone_target_stay_silent(
+    delivery: Delivery,
+    telegram: FakeTelegram,
+    session: AsyncSession,
+    sessionmaker: async_sessionmaker,
+    description: str,
+    alert: bool,
+) -> None:
+    await seed_chat(session)
+    job = await captioned_job(session)
+    telegram.errors[SendPhoto] = TelegramBadRequest(SendPhoto(chat_id=CHAT_ID, photo="x"), description)
+
+    await delivery.deliver(job.id)
+
+    assert description in (await load_job(sessionmaker, job.id)).delivery_error
+    assert len(telegram.calls(SendMessage)) == int(alert)
+
+
 async def test_persistent_network_errors_give_up_and_alert_owner(
     delivery: Delivery, telegram: FakeTelegram, sleeps: Sleeps, session: AsyncSession, sessionmaker: async_sessionmaker
 ) -> None:

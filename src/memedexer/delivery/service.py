@@ -58,6 +58,19 @@ ALERT_INTERVAL_SECONDS = 60 * 60
 ALERT_ERROR_CHARS = 500
 CLOSE_TIMEOUT_SECONDS = 10.0
 VIDEO_EXTENSIONS = {"video/quicktime": "mov", "video/webm": "webm", "video/x-matroska": "mkv"}
+# Telegram's descriptions (lowercased) for a reply whose target is gone: the original, its topic or the reply to edit
+# was deleted, or the chat can't be seen any more. Nothing to retry and nothing the owner must do; any other rejection
+# is a bug or a setup problem the owner should hear about.
+TARGET_GONE = (
+    "message to be replied not found",
+    "replied message not found",
+    "message to edit not found",
+    "message can't be edited",
+    "message thread not found",
+    "topic_deleted",
+    "topic_closed",
+    "chat not found",
+)
 
 
 class DeliveryFailed(Exception):
@@ -323,9 +336,11 @@ class Delivery:
             except TelegramRetryAfter as exc:
                 last_error = exc
                 await self._sleep(exc.retry_after)
-            except (TelegramBadRequest, TelegramForbiddenError) as exc:
-                # The original was deleted or the bot lost access: nothing to retry and nothing the owner must do.
+            except TelegramForbiddenError as exc:
+                # The bot was removed from the chat; membership updates take care of that.
                 raise self._failed(str(exc), alert=False) from exc
+            except TelegramBadRequest as exc:
+                raise self._failed(str(exc), alert=not _target_gone(exc)) from exc
             except (ImageError, DownloadError) as exc:
                 if isinstance(exc, ImageError) or not exc.retryable:
                     raise self._failed(str(exc), alert=True) from exc
@@ -413,6 +428,11 @@ class Delivery:
 
 def _caption_html(caption: Caption, *, spoiler: bool) -> str:
     return format_caption(caption.text, caption.description, caption.tags, spoiler=spoiler)
+
+
+def _target_gone(exc: TelegramBadRequest) -> bool:
+    description = exc.message.lower()
+    return any(reason in description for reason in TARGET_GONE)
 
 
 def _goes_back_as_document(job: Job, media: Media) -> bool:
