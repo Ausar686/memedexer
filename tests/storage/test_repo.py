@@ -119,6 +119,31 @@ async def test_claim_next_job_is_fifo_and_counts_attempts(session: AsyncSession)
     assert await repo.claim_next_job(session) is None
 
 
+async def test_claim_prefers_chats_with_fewer_jobs_running(session: AsyncSession) -> None:
+    busy, quiet = -100, -200
+    await _chat(session, busy)
+    await _chat(session, quiet)
+    await _media(session)
+    flood = [await _job(session, chat_id=busy, message_id=i) for i in range(1, 4)]
+    newcomer = await _job(session, chat_id=quiet, message_id=1)
+
+    claimed = [(await repo.claim_next_job(session)).id for _ in range(4)]
+
+    # The flood's first job runs, then the quiet chat's job jumps the flood's queue, then the flood goes on.
+    assert claimed == [flood[0].id, newcomer.id, flood[1].id, flood[2].id]
+
+
+async def test_a_lone_busy_chat_gets_every_worker(session: AsyncSession) -> None:
+    await _chat(session)
+    await _media(session)
+    jobs = [await _job(session, message_id=i) for i in range(1, 4)]
+
+    claimed = [await repo.claim_next_job(session) for _ in range(3)]
+
+    assert [job.id for job in claimed] == [job.id for job in jobs]
+    assert {job.status for job in claimed} == {JobStatus.RUNNING}
+
+
 async def test_requeue_interrupted_jobs(session: AsyncSession) -> None:
     await _chat(session)
     await _media(session)

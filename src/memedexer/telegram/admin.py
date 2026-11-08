@@ -20,7 +20,7 @@ from memedexer.pipeline.budget import limits_microusd, period_starts
 from memedexer.pipeline.resolve import resolve_caption_settings
 from memedexer.storage import repo
 from memedexer.storage.models import DESCRIPTION_LANGUAGE_MAX_LENGTH, Chat, ChatStatus, JobTrigger, Topic, utcnow
-from memedexer.telegram.handlers import Notifier
+from memedexer.telegram.handlers import MAX_QUEUED_JOBS_PER_CHAT, Notifier
 from memedexer.telegram.media import extract_media, save_media, topic_id
 
 log = logging.getLogger(__name__)
@@ -32,6 +32,7 @@ NOT_APPROVED = "This chat is waiting for the bot owner's approval."
 # Anyone in a chat that isn't approved can send commands; answer them at most this often.
 NOT_APPROVED_NOTICE_INTERVAL_SECONDS = 60 * 60
 ADMINS_ONLY = "Only chat admins can change this."
+QUEUE_FULL = "Too many captions are queued in this chat; try again once they're done."
 MODEL_SOURCES = {"topic": "set for this topic", "chat": "set for this chat", "default": "default"}
 
 
@@ -234,6 +235,9 @@ async def recaption(
     async with sessionmaker() as session:
         chat = await _approved_chat(session, message)
         if chat is None:
+            return
+        if await repo.count_queued_jobs(session, chat.id) >= MAX_QUEUED_JOBS_PER_CHAT:
+            await message.reply(QUEUE_FULL)
             return
         await save_media(session, media)
         await repo.enqueue_job(

@@ -3,6 +3,7 @@
 import datetime as dt
 
 import sqlalchemy as sa
+import sqlalchemy.orm
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from memedexer.storage.models import (
@@ -138,13 +139,31 @@ async def enqueue_job(
     return job
 
 
+async def count_queued_jobs(session: AsyncSession, chat_id: int) -> int:
+    """The chat's jobs waiting or running."""
+    query = sa.select(sa.func.count()).where(
+        Job.chat_id == chat_id, Job.status.in_((JobStatus.PENDING, JobStatus.RUNNING))
+    )
+    return int(await session.scalar(query))
+
+
 async def claim_next_job(session: AsyncSession, now: dt.datetime | None = None) -> Job | None:
-    """Atomically move the oldest due PENDING job to RUNNING and count the attempt."""
+    """Atomically move a due PENDING job to RUNNING and count the attempt.
+
+    The job comes from the chat with the fewest jobs running, oldest first: a chat flooding the queue can't starve the
+    others, yet a lone busy chat still gets every worker.
+    """
     now = now or utcnow()
+    running = sa.orm.aliased(Job)
+    running_in_chat = (
+        sa.select(sa.func.count())
+        .where(running.chat_id == Job.chat_id, running.status == JobStatus.RUNNING)
+        .scalar_subquery()
+    )
     oldest = (
         sa.select(Job.id)
         .where(Job.status == JobStatus.PENDING, Job.available_at <= now)
-        .order_by(Job.id)
+        .order_by(running_in_chat, Job.id)
         .limit(1)
         .scalar_subquery()
     )
