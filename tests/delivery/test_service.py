@@ -653,6 +653,27 @@ async def test_a_long_flood_wait_gives_up_instead_of_holding_the_queue(
     assert "Couldn't post a caption" in alert.text
 
 
+async def test_an_unexpected_crash_is_recorded_and_not_retried(
+    delivery: Delivery,
+    telegram: FakeTelegram,
+    downloader: FakeDownloader,
+    session: AsyncSession,
+    sessionmaker: async_sessionmaker,
+) -> None:
+    await seed_chat(session)
+    job = await captioned_job(session, reply_file_id=None)
+    downloader.result = RuntimeError("boom")
+
+    await delivery.deliver(job.id)
+    await delivery.start()
+    await delivery.join()
+
+    assert (await load_job(sessionmaker, job.id)).delivery_error == "internal error: RuntimeError('boom')"
+    assert downloader.file_ids == ["file-uniq"]
+    [alert] = telegram.calls(SendMessage)
+    assert "RuntimeError" in alert.text
+
+
 async def test_persistent_network_errors_give_up_and_alert_owner(
     delivery: Delivery, telegram: FakeTelegram, sleeps: Sleeps, session: AsyncSession, sessionmaker: async_sessionmaker
 ) -> None:

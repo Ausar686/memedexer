@@ -191,7 +191,13 @@ class Delivery:
         caption_html = _caption_html(caption, spoiler=job.has_spoiler)
         try:
             reply_message_id, sent = await self._post(job, media, caption_html, previous)
-        except DeliveryFailed as exc:
+        except Exception as error:
+            if isinstance(error, DeliveryFailed):
+                exc = error
+            else:
+                # Recorded like any failure, so the reply isn't retried on every restart.
+                log.exception("delivering job %d crashed", job_id)
+                exc = DeliveryFailed(f"internal error: {error!r}", alert=True)
             async with self._sessionmaker() as session:
                 stored = await session.get(Job, job_id)
                 stored.delivery_error = str(exc)
