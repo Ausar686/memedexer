@@ -34,13 +34,16 @@ are built per dispatcher (`build_*_router`) and wired in `app.build_dispatcher`.
 ## Chat lifecycle ([membership.py](membership.py))
 | Event | Effect |
 | --- | --- |
-| Bot added (`my_chat_member` not-member → member) | Chat saved as `pending`, owner gets a DM with Approve / Reject. An already `approved` chat stays approved without a new DM. |
+| Bot added (`my_chat_member` not-member → member) | Chat saved as `pending`, owner gets a DM with Approve / Reject, at most once per chat per day (`APPROVAL_REQUEST_INTERVAL_SECONDS`; the chat is in `/chats` either way). An already `approved` chat stays approved without a new DM. A `rejected` chat stays rejected and the bot leaves it silently: only the owner can approve it, from `/chats`. |
 | Owner presses Approve | `approved`; the bot posts a short notice in the chat (how to enable captions, and that images go to a third-party AI provider). |
 | Owner presses Reject / Revoke (from `/chats`) | `rejected` / `revoked`; the bot leaves the chat. |
 | Bot removed from the chat | `approved` or `pending` becomes `revoked`, so re-adding asks the owner again. |
 | Group upgraded to supergroup | The chat row (with topics and jobs) moves to the new id; a row the bot created for the new id is dropped. |
 
-Only `OWNER_USER_ID` can press the buttons or use `/chats`. Telegram doesn't
+`/chats` lists approved, pending and rejected chats with Revoke, Approve /
+Reject and Approve buttons. Approving a chat the bot has left tells the owner
+to add the bot again. Only `OWNER_USER_ID` can press the buttons or use
+`/chats`. Telegram doesn't
 let bots DM someone first, so the owner must send `/start` once; startup logs
 a warning if the owner can't be reached ([setup.py](setup.py)).
 
@@ -54,9 +57,11 @@ a warning if the owner can't be reached ([setup.py](setup.py)).
 | `/recaption` (as a reply to an image or a video) | admins | Enqueue a `recaption` job, skipping dedup |
 
 "Admins" means the chat's creator or administrators (checked with
-`getChatMember`), anonymous admins posting as the group, and the owner.
-Commands in a chat that isn't approved get a short "waiting for approval"
-reply. Command menus are registered at startup.
+`getChatMember`; a failed lookup counts as not an admin), anonymous admins
+posting as the group, and the owner. Commands run only in approved chats
+(`require_approved_chat`, checked first): elsewhere the chat gets a short
+"waiting for approval" reply at most once an hour, and no usage text or admin
+lookups. Command menus are registered at startup.
 
 ## Bot setup requirements
 - Turn privacy mode off in BotFather (or make the bot an admin). Otherwise

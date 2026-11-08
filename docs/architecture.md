@@ -51,8 +51,11 @@ update (photo / video / GIF / image or video document) in an approved chat
   when the bot is added to a chat. Unapproved chats are ignored; rejecting
   makes the bot leave. The owner can list and revoke approved chats via DM.
   The owner must `/start` the bot once so it can DM them. Removing the bot
-  revokes the chat, so re-adding it asks again; a group upgraded to a
-  supergroup keeps its settings.
+  revokes the chat, so re-adding it asks again (at most one DM per chat per
+  day); a rejected chat can't ask again, and only the owner can approve it
+  later from `/chats`. Commands in a chat that isn't approved get one
+  "waiting for approval" reply per hour. A group upgraded to a supergroup
+  keeps its settings.
 - **Providers:** Anthropic and OpenAI via their official SDKs. A future local
   service plugs in as an OpenAI-compatible endpoint.
 - **Caption schema:** verbatim on-image `text` (original languages and line
