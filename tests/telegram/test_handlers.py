@@ -4,8 +4,8 @@ from aiogram import Bot, Dispatcher
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from memedexer.storage.models import NO_TOPIC, ChatStatus, Job, JobTrigger, Media
-from tests.factories import THREAD_ID, seed_chat
-from tests.telegram.conftest import SpyWorker
+from tests.factories import CHAT_ID, THREAD_ID, seed_chat
+from tests.telegram.conftest import SpyReplies, SpyWorker
 from tests.telegram.updates import PHOTO_SIZES, document, update
 
 
@@ -103,6 +103,63 @@ async def test_edit_keeping_the_image_is_ignored(
     await dispatcher.feed_update(bot, update(2, edited=True, edit_date=1, photo=PHOTO_SIZES))
 
     assert len(await jobs(sessionmaker)) == 1
+
+
+@pytest.mark.parametrize("spoiler", [True, False])
+async def test_spoiler_flag_is_recorded_on_the_job(
+    dispatcher: Dispatcher, bot: Bot, session: AsyncSession, sessionmaker: async_sessionmaker, spoiler: bool
+) -> None:
+    await seed_chat(session)
+
+    await dispatcher.feed_update(bot, update(photo=PHOTO_SIZES, has_media_spoiler=spoiler))
+
+    [job] = await jobs(sessionmaker)
+    assert job.has_spoiler is spoiler
+
+
+async def test_edit_adding_a_spoiler_hides_the_replies_instead_of_recaptioning(
+    dispatcher: Dispatcher,
+    bot: Bot,
+    session: AsyncSession,
+    sessionmaker: async_sessionmaker,
+    worker: SpyWorker,
+    replies: SpyReplies,
+) -> None:
+    await seed_chat(session)
+    await dispatcher.feed_update(bot, update(1, photo=PHOTO_SIZES))
+
+    await dispatcher.feed_update(bot, update(2, edited=True, edit_date=1, photo=PHOTO_SIZES, has_media_spoiler=True))
+
+    assert replies.hidden == [(CHAT_ID, 100)]
+    assert len(await jobs(sessionmaker)) == 1
+    assert worker.notified == 1
+
+
+async def test_edit_removing_a_spoiler_keeps_the_replies_hidden(
+    dispatcher: Dispatcher, bot: Bot, session: AsyncSession, sessionmaker: async_sessionmaker, replies: SpyReplies
+) -> None:
+    await seed_chat(session)
+    await dispatcher.feed_update(bot, update(1, photo=PHOTO_SIZES, has_media_spoiler=True))
+
+    await dispatcher.feed_update(bot, update(2, edited=True, edit_date=1, photo=PHOTO_SIZES))
+
+    [job] = await jobs(sessionmaker)
+    assert job.has_spoiler is True
+    assert replies.hidden == []
+
+
+async def test_edit_replacing_the_image_with_a_spoiler_enqueues_a_spoiler_job(
+    dispatcher: Dispatcher, bot: Bot, session: AsyncSession, sessionmaker: async_sessionmaker, replies: SpyReplies
+) -> None:
+    await seed_chat(session)
+    await dispatcher.feed_update(bot, update(1, photo=PHOTO_SIZES))
+    new_photo = [{"file_id": "n", "file_unique_id": "un", "width": 800, "height": 600}]
+
+    await dispatcher.feed_update(bot, update(2, edited=True, edit_date=1, photo=new_photo, has_media_spoiler=True))
+
+    first, second = await jobs(sessionmaker)
+    assert (first.has_spoiler, second.has_spoiler, second.file_unique_id) == (False, True, "un")
+    assert replies.hidden == []
 
 
 async def test_edit_of_uncaptioned_message_is_enqueued(

@@ -18,6 +18,14 @@ class SpyWorker:
         self.notified += 1
 
 
+class SpyReplies:
+    def __init__(self) -> None:
+        self.hidden: list[tuple[int, int]] = []
+
+    async def hide_replies(self, chat_id: int, message_id: int) -> None:
+        self.hidden.append((chat_id, message_id))
+
+
 @pytest.fixture
 def sessionmaker(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
     return db.create_sessionmaker(engine)
@@ -26,6 +34,11 @@ def sessionmaker(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
 @pytest.fixture
 def worker() -> SpyWorker:
     return SpyWorker()
+
+
+@pytest.fixture
+def replies() -> SpyReplies:
+    return SpyReplies()
 
 
 @pytest.fixture
@@ -39,5 +52,7 @@ def bot(telegram: FakeTelegram) -> Bot:
 
 
 @pytest.fixture
-def dispatcher(sessionmaker: async_sessionmaker[AsyncSession], worker: SpyWorker, settings: Settings) -> Dispatcher:
-    return build_dispatcher(sessionmaker=sessionmaker, worker=worker, settings=settings)
+def dispatcher(
+    sessionmaker: async_sessionmaker[AsyncSession], worker: SpyWorker, replies: SpyReplies, settings: Settings
+) -> Dispatcher:
+    return build_dispatcher(sessionmaker=sessionmaker, worker=worker, delivery=replies, settings=settings)

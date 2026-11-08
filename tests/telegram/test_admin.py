@@ -202,6 +202,19 @@ async def test_recaption_enqueues_job_for_replied_image(
     assert telegram.sent_texts(CHAT_ID) == ["Queued a fresh caption."]
 
 
+async def test_recaption_keeps_the_spoiler_of_the_replied_image(
+    dispatcher: Dispatcher, bot: Bot, session: AsyncSession, sessionmaker: async_sessionmaker
+) -> None:
+    await seed_chat(session)
+    original = message_data(message_id=55, photo=PHOTO_SIZES, has_media_spoiler=True)
+
+    await command(dispatcher, bot, "/recaption", reply_to=original)
+
+    async with sessionmaker() as s:
+        [job] = list(await s.scalars(sa.select(Job)))
+    assert job.has_spoiler is True
+
+
 async def test_recaption_needs_an_image_reply(
     dispatcher: Dispatcher, bot: Bot, telegram: FakeTelegram, session: AsyncSession, worker: SpyWorker
 ) -> None:

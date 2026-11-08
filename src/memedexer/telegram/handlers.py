@@ -21,6 +21,10 @@ class Notifier(t.Protocol):
     def notify(self) -> None: ...
 
 
+class ReplyHider(t.Protocol):
+    async def hide_replies(self, chat_id: int, message_id: int) -> None: ...
+
+
 def build_router() -> Router:
     router = Router(name="ingestion")
     router.message.register(on_image, _in_group, _has_image)
@@ -32,14 +36,23 @@ async def on_image(message: Message, sessionmaker: async_sessionmaker[AsyncSessi
     await ingest(message, JobTrigger.MESSAGE, sessionmaker, worker)
 
 
-async def on_edited_image(message: Message, sessionmaker: async_sessionmaker[AsyncSession], worker: Notifier) -> None:
-    await ingest(message, JobTrigger.EDIT, sessionmaker, worker)
+async def on_edited_image(
+    message: Message, sessionmaker: async_sessionmaker[AsyncSession], worker: Notifier, delivery: ReplyHider
+) -> None:
+    await ingest(message, JobTrigger.EDIT, sessionmaker, worker, delivery)
 
 
 async def ingest(
-    message: Message, trigger: JobTrigger, sessionmaker: async_sessionmaker[AsyncSession], worker: Notifier
+    message: Message,
+    trigger: JobTrigger,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    worker: Notifier,
+    delivery: ReplyHider | None = None,
 ) -> bool:
-    """Enqueue a job if the chat is approved and the topic has captioning on; True when one was enqueued."""
+    """Enqueue a job if the chat is approved and the topic has captioning on; True when one was enqueued.
+
+    An edit that keeps the image but adds a spoiler hides the replies already posted instead.
+    """
     image = extract_image(message)
     if image is None:
         return False
@@ -55,6 +68,8 @@ async def ingest(
             # Edits that only touch the text keep the same file; only a replaced image needs a new caption.
             previous = await repo.latest_job_for_message(session, chat.id, message.message_id)
             if previous is not None and previous.file_unique_id == image.file_unique_id:
+                if message.has_media_spoiler and delivery is not None:
+                    await delivery.hide_replies(chat.id, message.message_id)
                 return False
         await repo.upsert_media(
             session,
@@ -73,6 +88,7 @@ async def ingest(
             message_id=message.message_id,
             file_unique_id=image.file_unique_id,
             trigger=trigger,
+            has_spoiler=bool(message.has_media_spoiler),
         )
         await session.commit()
     log.info("enqueued job %d (%s) for chat %d message %d", job.id, trigger, chat.id, message.message_id)
