@@ -17,7 +17,10 @@ def corner(picture: PIL.Image.Image) -> str:
     return min(palette, key=lambda name: sum(abs(a - b) for a, b in zip(pixel, palette[name], strict=True)))
 
 
-def test_seekable_video_samples_by_position() -> None:
+def test_seekable_video_samples_by_position(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Seeking skips decoding the whole video; the forward scan is only a fallback.
+    monkeypatch.setattr(frames, "_scan", None)
+
     assert [corner(p) for p in frames.sample_frames(videos.clip(SCENES))] == ["green", "red", "white"]
 
 
@@ -53,3 +56,22 @@ def test_ffmpeg_errors_become_value_errors_with_a_readable_reason() -> None:
 def test_other_containers_are_refused() -> None:
     with pytest.raises(ValueError, match="unsupported container format"):
         frames.sample_frames(videos.clip(["red"], container="nut"))
+
+
+@pytest.mark.parametrize(("container", "codec"), [("mpegts", "h264"), ("mpeg", "mpeg2video")])
+def test_positions_count_from_the_first_timestamp(container: str, codec: str) -> None:
+    # MPEG streams start at a non-zero timestamp and seek imprecisely; targets that ignored the start landed early,
+    # or before the first frame.
+    data = videos.clip(SCENES, container=container, codec=codec)
+    with frames._open(data) as opened:
+        assert opened.streams.video[0].start_time > 0
+
+    assert [corner(p) for p in frames.sample_frames(data)] == [
+        "green",
+        "red",
+        "white",
+    ]
+
+
+def test_a_one_second_mpeg_ts_clip_has_a_frame() -> None:
+    assert [corner(p) for p in frames.sample_frames(videos.clip(["red"], container="mpegts"))] == ["red"]
