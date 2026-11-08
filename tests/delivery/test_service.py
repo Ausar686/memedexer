@@ -12,7 +12,8 @@ from aiogram.types import BufferedInputFile, InputMediaPhoto, InputMediaVideo
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from memedexer.config import Provider, Settings
-from memedexer.delivery.service import MAX_SEND_ATTEMPTS, Delivery, message_link
+from memedexer.cooldown import Cooldown
+from memedexer.delivery.service import ALERT_INTERVAL_SECONDS, MAX_SEND_ATTEMPTS, Delivery, message_link
 from memedexer.delivery.throttle import Throttle
 from memedexer.pipeline.worker import MAX_DOWNLOAD_BYTES, DownloadError, Worker
 from memedexer.storage import db, repo
@@ -524,6 +525,29 @@ async def test_failures_alert_owner_once_per_cooldown(
     assert alert.chat_id == OWNER
     assert f"Captioning {verb} in" in alert.text
     assert "provider said &lt;no&gt;" in alert.text
+
+
+async def test_alerts_with_different_errors_are_throttled_together_and_counted(
+    delivery: Delivery, telegram: FakeTelegram, session: AsyncSession
+) -> None:
+    # Errors can differ for every bad file, so they mustn't make every alert unique.
+    now = [0.0]
+    delivery._alerts = Cooldown(ALERT_INTERVAL_SECONDS, lambda: now[0])
+    await seed_chat(session)
+    jobs = [await seed_job(session, message_id=i) for i in range(4)]
+    for index, job in enumerate(jobs):
+        repo.finish_job(job, JobStatus.FAILED, error=f"cannot decode image: broken file #{index}")
+    await session.commit()
+
+    for job in jobs[:3]:
+        await delivery.job_finished(job)
+    now[0] = ALERT_INTERVAL_SECONDS
+    await delivery.job_finished(jobs[3])
+
+    first, second = telegram.calls(SendMessage)
+    assert "broken file #0" in first.text and "more like this" not in first.text
+    assert "broken file #3" in second.text
+    assert "(2 more like this in the last hour weren't sent.)" in second.text
 
 
 async def test_budget_alert_only_for_first_over_budget_job(
