@@ -167,7 +167,7 @@ def test_read_frames_round_trips() -> None:
     ],
     ids=["short-frame", "short-length", "oversized", "too-many", "none"],
 )
-def test_read_frames_rejects_what_a_sound_decoder_cannot_produce(output: bytes, message: str) -> None:
+def test_read_frames_rejects_what_a_well_behaved_decoder_cannot_produce(output: bytes, message: str) -> None:
     with pytest.raises(VideoError, match=message):
         read_frames(output)
 
