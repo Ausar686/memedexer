@@ -13,13 +13,15 @@ from aiogram.types import BufferedInputFile, InputMediaAnimation, InputMediaDocu
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from memedexer.config import Provider, Settings
-from memedexer.delivery.service import MAX_SEND_ATTEMPTS, Delivery, message_link
+from memedexer.cooldown import Cooldown
+from memedexer.delivery.service import ALERT_INTERVAL_SECONDS, MAX_SEND_ATTEMPTS, Delivery, message_link
 from memedexer.delivery.throttle import Throttle
 from memedexer.pipeline.worker import MAX_DOWNLOAD_BYTES, DownloadError, Worker
 from memedexer.storage import db, repo
 from memedexer.storage.models import (
     NO_TOPIC,
     Caption,
+    Chat,
     ChatStatus,
     Job,
     JobStatus,
@@ -715,6 +717,47 @@ async def test_failures_alert_owner_once_per_cooldown(
     assert "provider said &lt;no&gt;" in alert.text
 
 
+async def test_alerts_with_different_errors_are_throttled_together_and_counted(
+    delivery: Delivery, telegram: FakeTelegram, session: AsyncSession
+) -> None:
+    # Errors can differ for every bad file, so they mustn't make every alert unique.
+    now = [0.0]
+    delivery._alerts = Cooldown(ALERT_INTERVAL_SECONDS, lambda: now[0], count_suppressed=True)
+    await seed_chat(session)
+    jobs = [await seed_job(session, message_id=i) for i in range(4)]
+    for index, job in enumerate(jobs):
+        repo.finish_job(job, JobStatus.FAILED, error=f"cannot decode image: broken file #{index}")
+    await session.commit()
+
+    for job in jobs[:3]:
+        await delivery.job_finished(job)
+    now[0] = ALERT_INTERVAL_SECONDS
+    await delivery.job_finished(jobs[3])
+
+    first, second = telegram.calls(SendMessage)
+    assert "broken file #0" in first.text and "more like this" not in first.text
+    assert "broken file #3" in second.text
+    assert "(2 more like this in the last hour weren't sent.)" in second.text
+
+
+async def test_renaming_a_chat_does_not_restart_its_alert_interval(
+    delivery: Delivery, telegram: FakeTelegram, session: AsyncSession, sessionmaker: async_sessionmaker
+) -> None:
+    await seed_chat(session)
+    first, second = [await seed_job(session, message_id=i) for i in range(2)]
+    for job in (first, second):
+        repo.finish_job(job, JobStatus.FAILED, error="boom")
+    await session.commit()
+
+    await delivery.job_finished(first)
+    async with sessionmaker() as s:
+        (await s.get(Chat, CHAT_ID)).title = "renamed memes"
+        await s.commit()
+    await delivery.job_finished(second)
+
+    assert len(telegram.calls(SendMessage)) == 1
+
+
 async def test_budget_alert_only_for_first_over_budget_job(
     delivery: Delivery, telegram: FakeTelegram, settings: Settings, session: AsyncSession
 ) -> None:
@@ -733,6 +776,29 @@ async def test_budget_alert_only_for_first_over_budget_job(
 
     [alert] = telegram.calls(SendMessage)
     assert "reached its daily budget of $0.00" in alert.text
+
+
+async def test_total_budget_alert_is_sent_once_for_all_chats(
+    delivery: Delivery, telegram: FakeTelegram, settings: Settings, session: AsyncSession
+) -> None:
+    settings.cost_limit_total_monthly_usd = decimal.Decimal("0.0001")
+    other = CHAT_ID - 1
+    await seed_chat(session)
+    await seed_chat(session, chat_id=other)
+    spent = await seed_job(session, message_id=1)
+    spent.cost_microusd = 100
+    repo.finish_job(spent, JobStatus.DONE)
+    over = [await seed_job(session, message_id=2), await seed_job(session, message_id=3, chat_id=other)]
+    for job in over:
+        repo.finish_job(job, JobStatus.BUDGET_EXCEEDED, error="total monthly limit reached")
+    await session.commit()
+
+    for job in reversed(over):
+        await delivery.job_finished(job)
+
+    [alert] = telegram.calls(SendMessage)
+    assert alert.text.startswith("💸 Spending across all chats reached the total monthly budget of $0.00.")
+    assert "paused in every chat" in alert.text
 
 
 async def test_crashing_delivery_does_not_stop_the_queue(

@@ -1,5 +1,6 @@
 """Group commands in approved chats: show settings to anyone; change them (and force a recaption) as a chat admin."""
 
+import asyncio
 import collections.abc as cabc
 import html
 import logging
@@ -20,8 +21,8 @@ from memedexer.pipeline.budget import limits_microusd, period_starts
 from memedexer.pipeline.resolve import resolve_caption_settings
 from memedexer.storage import repo
 from memedexer.storage.models import DESCRIPTION_LANGUAGE_MAX_LENGTH, Chat, ChatStatus, JobTrigger, Topic, utcnow
-from memedexer.telegram.handlers import Notifier
-from memedexer.telegram.media import extract_media, save_media, topic_id
+from memedexer.telegram.handlers import BacklogFull, Notifier, enqueue_within_cap
+from memedexer.telegram.media import extract_media, topic_id
 
 log = logging.getLogger(__name__)
 
@@ -32,6 +33,7 @@ NOT_APPROVED = "This chat is waiting for the bot owner's approval."
 # Anyone in a chat that isn't approved can send commands; answer them at most this often.
 NOT_APPROVED_NOTICE_INTERVAL_SECONDS = 60 * 60
 ADMINS_ONLY = "Only chat admins can change this."
+QUEUE_FULL = "Too many captions are queued in this chat; try again once they're done."
 MODEL_SOURCES = {"topic": "set for this topic", "chat": "set for this chat", "default": "default"}
 
 
@@ -222,6 +224,7 @@ async def recaption(
     sessionmaker: async_sessionmaker[AsyncSession],
     settings: Settings,
     worker: Notifier,
+    enqueue_lock: asyncio.Lock,
 ) -> None:
     target = message.reply_to_message
     media = extract_media(target) if target is not None else None
@@ -235,16 +238,19 @@ async def recaption(
         chat = await _approved_chat(session, message)
         if chat is None:
             return
-        await save_media(session, media)
-        await repo.enqueue_job(
-            session,
-            chat_id=chat.id,
-            thread_id=topic_id(target),
-            message_id=target.message_id,
-            file_unique_id=media.file_unique_id,
-            trigger=JobTrigger.RECAPTION,
-            has_spoiler=bool(target.has_media_spoiler),
-        )
-        await session.commit()
+        try:
+            await enqueue_within_cap(
+                session,
+                enqueue_lock,
+                chat,
+                media,
+                thread_id=topic_id(target),
+                message_id=target.message_id,
+                trigger=JobTrigger.RECAPTION,
+                has_spoiler=bool(target.has_media_spoiler),
+            )
+        except BacklogFull:
+            await message.reply(QUEUE_FULL)
+            return
     worker.notify()
     await message.reply("Queued a fresh caption.")

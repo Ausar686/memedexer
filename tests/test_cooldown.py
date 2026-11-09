@@ -30,3 +30,26 @@ def test_expired_keys_are_forgotten() -> None:
     cooldown.ready("new")
 
     assert list(cooldown._last) == ["new"]
+
+
+def test_suppressed_calls_are_counted_until_popped() -> None:
+    clock = Clock()
+    cooldown = Cooldown(60, clock, count_suppressed=True)
+    cooldown.ready("a")
+    cooldown.ready("a")
+    cooldown.ready("a")
+
+    clock.now = 60
+    assert cooldown.ready("a") is True
+    assert cooldown.pop_suppressed("a") == 2
+    assert cooldown.pop_suppressed("a") == 0
+    assert cooldown.pop_suppressed("never") == 0
+
+
+def test_suppressed_calls_are_not_counted_unless_asked() -> None:
+    cooldown = Cooldown(60, Clock())
+    cooldown.ready("a")
+    cooldown.ready("a")
+
+    assert cooldown.pop_suppressed("a") == 0
+    assert not cooldown._suppressed

@@ -19,7 +19,7 @@ from memedexer.pipeline.worker import Worker
 from memedexer.storage import db
 from memedexer.telegram.admin import NOT_APPROVED_NOTICE_INTERVAL_SECONDS, build_admin_router
 from memedexer.telegram.downloader import BotDownloader
-from memedexer.telegram.handlers import build_router
+from memedexer.telegram.handlers import BACKLOG_ALERT_INTERVAL_SECONDS, build_router
 from memedexer.telegram.membership import APPROVAL_REQUEST_INTERVAL_SECONDS, build_membership_router
 from memedexer.telegram.setup import prepare_bot
 
@@ -32,10 +32,12 @@ PR_SET_DUMPABLE = 4
 
 
 def build_dispatcher(**context: object) -> Dispatcher:
-    # Per-dispatcher rate limits on what strangers can make the bot send (see `telegram.membership` and `admin`).
+    # Per-dispatcher rate limits on what chats can make the bot send (see `telegram.membership`, `admin`, `handlers`).
     dispatcher = Dispatcher(
         approval_requests=Cooldown(APPROVAL_REQUEST_INTERVAL_SECONDS),
         approval_notices=Cooldown(NOT_APPROVED_NOTICE_INTERVAL_SECONDS),
+        backlog_alerts=Cooldown(BACKLOG_ALERT_INTERVAL_SECONDS, count_suppressed=True),
+        enqueue_lock=asyncio.Lock(),
     )
     dispatcher.include_routers(build_membership_router(), build_admin_router(), build_router())
     for key, value in context.items():

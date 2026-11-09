@@ -3,6 +3,7 @@
 import datetime as dt
 
 import sqlalchemy as sa
+from sqlalchemy import orm
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from memedexer.storage.models import (
@@ -138,13 +139,31 @@ async def enqueue_job(
     return job
 
 
+async def count_queued_jobs(session: AsyncSession, chat_id: int) -> int:
+    """The chat's jobs waiting or running."""
+    query = sa.select(sa.func.count()).where(
+        Job.chat_id == chat_id, Job.status.in_((JobStatus.PENDING, JobStatus.RUNNING))
+    )
+    return int(await session.scalar(query))
+
+
 async def claim_next_job(session: AsyncSession, now: dt.datetime | None = None) -> Job | None:
-    """Atomically move the oldest due PENDING job to RUNNING and count the attempt."""
+    """Atomically move a due PENDING job to RUNNING and count the attempt.
+
+    The job comes from the chat with the fewest jobs running, oldest first: a chat flooding the queue can't starve the
+    others, yet a lone busy chat still gets every worker.
+    """
     now = now or utcnow()
+    running = orm.aliased(Job)
+    running_in_chat = (
+        sa.select(sa.func.count())
+        .where(running.chat_id == Job.chat_id, running.status == JobStatus.RUNNING)
+        .scalar_subquery()
+    )
     oldest = (
         sa.select(Job.id)
         .where(Job.status == JobStatus.PENDING, Job.available_at <= now)
-        .order_by(Job.id)
+        .order_by(running_in_chat, Job.id)
         .limit(1)
         .scalar_subquery()
     )
@@ -237,22 +256,25 @@ async def undelivered_jobs(session: AsyncSession, since: dt.datetime) -> list[Jo
     return list(await session.scalars(query))
 
 
-async def earlier_budget_exceeded(session: AsyncSession, job: Job, since: dt.datetime) -> int:
-    """Over-budget jobs of the same chat in the period with a lower id.
+async def earlier_budget_exceeded(session: AsyncSession, job: Job, since: dt.datetime, *, any_chat: bool) -> int:
+    """Jobs stopped by the same limit (same error) in the period with a lower id, in the job's chat or in any chat.
 
     Comparing ids (not "any other job") makes exactly one job, the first, alert even when several finish at once.
     """
     query = sa.select(sa.func.count()).where(
-        Job.chat_id == job.chat_id,
         Job.status == JobStatus.BUDGET_EXCEEDED,
+        Job.error == job.error,
         Job.finished_at >= since,
         Job.id < job.id,
     )
+    if not any_chat:
+        query = query.where(Job.chat_id == job.chat_id)
     return int(await session.scalar(query))
 
 
-async def spent_microusd(session: AsyncSession, chat_id: int, since: dt.datetime) -> int:
-    query = sa.select(sa.func.coalesce(sa.func.sum(Job.cost_microusd), 0)).where(
-        Job.chat_id == chat_id, Job.finished_at >= since
-    )
+async def spent_microusd(session: AsyncSession, chat_id: int | None, since: dt.datetime) -> int:
+    """Spend of one chat, or of all chats when `chat_id` is `None`."""
+    query = sa.select(sa.func.coalesce(sa.func.sum(Job.cost_microusd), 0)).where(Job.finished_at >= since)
+    if chat_id is not None:
+        query = query.where(Job.chat_id == chat_id)
     return int(await session.scalar(query))

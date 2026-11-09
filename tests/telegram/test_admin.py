@@ -11,7 +11,8 @@ from memedexer.config import Settings
 from memedexer.cooldown import Cooldown
 from memedexer.storage import repo
 from memedexer.storage.models import DESCRIPTION_LANGUAGE_MAX_LENGTH, NO_TOPIC, Chat, ChatStatus, Job, JobTrigger, Topic
-from memedexer.telegram.admin import ADMINS_ONLY, NOT_APPROVED, NOT_APPROVED_NOTICE_INTERVAL_SECONDS
+from memedexer.telegram.admin import ADMINS_ONLY, NOT_APPROVED, NOT_APPROVED_NOTICE_INTERVAL_SECONDS, QUEUE_FULL
+from memedexer.telegram.handlers import MAX_QUEUED_JOBS_PER_CHAT
 from tests.factories import CHAT_ID, THREAD_ID, seed_chat, seed_job
 from tests.telegram.conftest import SpyWorker
 from tests.telegram.fake_api import FakeTelegram
@@ -259,6 +260,19 @@ async def test_recaption_accepts_a_video(
     async with sessionmaker() as s:
         [job] = list(await s.scalars(sa.select(Job)))
     assert (job.file_unique_id, job.trigger) == ("vid", JobTrigger.RECAPTION)
+
+
+async def test_recaption_is_refused_when_the_queue_is_full(
+    dispatcher: Dispatcher, bot: Bot, telegram: FakeTelegram, session: AsyncSession, worker: SpyWorker
+) -> None:
+    await seed_chat(session)
+    for message_id in range(MAX_QUEUED_JOBS_PER_CHAT):
+        await seed_job(session, message_id=message_id)
+
+    await command(dispatcher, bot, "/recaption", reply_to=message_data(message_id=555, photo=PHOTO_SIZES))
+
+    assert telegram.sent_texts(CHAT_ID) == [QUEUE_FULL]
+    assert worker.notified == 0
 
 
 async def test_recaption_needs_an_image_reply(

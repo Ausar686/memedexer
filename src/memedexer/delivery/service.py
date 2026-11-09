@@ -25,6 +25,7 @@ from aiogram.types import (
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from memedexer.config import Settings
+from memedexer.cooldown import Cooldown
 from memedexer.delivery.format import format_caption
 from memedexer.delivery.throttle import Throttle
 from memedexer.pipeline import budget
@@ -53,7 +54,7 @@ log = logging.getLogger(__name__)
 UNDELIVERED_LOOKBACK = dt.timedelta(hours=24)
 MAX_SEND_ATTEMPTS = 4
 SEND_RETRY_SECONDS = 5.0
-ALERT_COOLDOWN = dt.timedelta(hours=1)
+ALERT_INTERVAL_SECONDS = 60 * 60
 ALERT_ERROR_CHARS = 500
 CLOSE_TIMEOUT_SECONDS = 10.0
 VIDEO_EXTENSIONS = {"video/quicktime": "mov", "video/webm": "webm", "video/x-matroska": "mkv"}
@@ -90,7 +91,7 @@ class Delivery:
         self._sleep = sleep
         self._queues: dict[int, asyncio.Queue[int]] = {}
         self._tasks: dict[int, asyncio.Task[None]] = {}
-        self._last_alert: dict[tuple[int, str, str], dt.datetime] = {}
+        self._alerts = Cooldown(ALERT_INTERVAL_SECONDS, count_suppressed=True)
 
     async def start(self) -> None:
         """Re-queue replies a restart interrupted."""
@@ -182,7 +183,7 @@ class Delivery:
                 await session.commit()
             log.warning("job %d not delivered: %s", job_id, exc)
             if exc.alert:
-                await self._notify(chat, job, f"⚠️ Couldn't post a caption in {describe_chat(chat)}", str(exc))
+                await self._notify(chat, job, "⚠️ Couldn't post a caption in {chat}", str(exc))
             return
 
         async with self._sessionmaker() as session:
@@ -232,7 +233,7 @@ class Delivery:
         except DeliveryFailed as exc:
             log.warning("reply of job %d not hidden: %s", job_id, exc)
             if exc.alert:
-                await self._notify(chat, job, f"⚠️ Couldn't hide a spoiler reply in {describe_chat(chat)}", str(exc))
+                await self._notify(chat, job, "⚠️ Couldn't hide a spoiler reply in {chat}", str(exc))
         return None
 
     async def _post(self, job: Job, media: Media, caption: str, previous: Job | None) -> tuple[int, Message | None]:
@@ -358,43 +359,53 @@ class Delivery:
         await self._notify(
             chat,
             job,
-            f"ℹ️ A video in {describe_chat(chat)} is over the Bot API's 20 MB download limit, so it was captioned "
-            "from its small preview only; text the preview doesn't show is missing.",
+            "ℹ️ A video in {chat} is over the Bot API's 20 MB download limit, so it was captioned from its small "
+            "preview only; text the preview doesn't show is missing.",
         )
 
     async def _alert_failure(self, job: Job) -> None:
         async with self._sessionmaker() as session:
             chat = await session.get(Chat, job.chat_id)
         verb = "refused" if job.status is JobStatus.REFUSED else "failed"
-        await self._notify(chat, job, f"⚠️ Captioning {verb} in {describe_chat(chat)}", job.error or "")
+        await self._notify(chat, job, f"⚠️ Captioning {verb} in {{chat}}", job.error or "")
 
     async def _alert_budget(self, job: Job) -> None:
         finished_at = job.finished_at or utcnow()
         async with self._sessionmaker() as session:
             chat = await session.get(Chat, job.chat_id)
-            period = await budget.exceeded_period(session, job.chat_id, self._settings, finished_at)
-            if period is None:
+            limit = await budget.exceeded_limit(session, job.chat_id, self._settings, finished_at)
+            if limit is None:
                 return
-            if await repo.earlier_budget_exceeded(session, job, budget.period_starts(finished_at)[period]):
+            since = budget.period_starts(finished_at)[limit.period]
+            if await repo.earlier_budget_exceeded(session, job, since, any_chat=limit.total):
                 return
-        limit = budget.limits_microusd(self._settings)[period] / 1_000_000
-        await notify_owner(
-            self._bot,
-            self._settings,
-            f"💸 {describe_chat(chat)} reached its {period} budget of ${limit:.2f}. "
-            "Captioning is paused there until the period resets (UTC).",
-        )
+        usd = limit.microusd / 1_000_000
+        if limit.total:
+            text = (
+                f"💸 Spending across all chats reached the total {limit.period} budget of ${usd:.2f}. "
+                "Captioning is paused in every chat until the period resets (UTC)."
+            )
+        else:
+            text = (
+                f"💸 {describe_chat(chat)} reached its {limit.period} budget of ${usd:.2f}. "
+                "Captioning is paused there until the period resets (UTC)."
+            )
+        await notify_owner(self._bot, self._settings, text)
 
     async def _notify(self, chat: Chat, job: Job, headline: str, error: str = "") -> None:
-        """DM the owner, at most once per chat and error per cooldown so an outage doesn't flood them."""
-        key = (chat.id, headline, error)
-        now = utcnow()
-        if (last := self._last_alert.get(key)) is not None and now - last < ALERT_COOLDOWN:
+        """DM the owner `headline` (with `{chat}` for the chat), at most once per chat and kind per interval.
+
+        The key is the template, not the text: the error can differ for every file, and the chat's title can change,
+        and neither should let an outage or a flood of bad files flood the DM.
+        """
+        key = (chat.id, headline)
+        if not self._alerts.ready(key):
             return
-        self._last_alert[key] = now
-        lines = [headline]
+        lines = [headline.format(chat=describe_chat(chat))]
         if error:
             lines.append(f"<code>{html.escape(error[:ALERT_ERROR_CHARS])}</code>")
+        if suppressed := self._alerts.pop_suppressed(key):
+            lines.append(f"({suppressed} more like this in the last hour weren't sent.)")
         if link := message_link(chat.id, job.message_id):
             lines.append(link)
         await notify_owner(self._bot, self._settings, "\n".join(lines))

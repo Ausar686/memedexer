@@ -10,6 +10,9 @@ are built per dispatcher (`build_*_router`) and wired in `app.build_dispatcher`.
   ignored).
 - A job is enqueued only when the chat is `approved` **and** the message's
   topic has `captioning_enabled`. Everything else is ignored silently.
+- A chat with `MAX_QUEUED_JOBS_PER_CHAT` (50) jobs waiting or running gets no
+  new ones until they're done; the owner is told at most once an hour.
+  `/recaption` answers that the queue is full.
 - Topic: `message_thread_id` when `is_topic_message` is set, otherwise
   `NO_TOPIC`. Reply threads in ordinary groups also carry a thread id, so the
   flag matters.
