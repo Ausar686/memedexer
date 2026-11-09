@@ -609,6 +609,125 @@ async def test_deleted_original_is_given_up_silently(
     assert telegram.calls(SendMessage) == []
 
 
+@pytest.mark.parametrize(
+    ("description", "alert"),
+    [
+        ("Bad Request: message to be replied not found", False),
+        ("Bad Request: TOPIC_CLOSED", False),
+        ("Bad Request: message thread not found", False),
+        ("Bad Request: can't parse entities: unclosed tag", True),
+        ("Bad Request: wrong file identifier/HTTP URL specified", True),
+        ("Bad Request: not enough rights to send photos to the chat", True),
+    ],
+)
+async def test_only_rejections_for_a_gone_target_stay_silent(
+    delivery: Delivery,
+    telegram: FakeTelegram,
+    session: AsyncSession,
+    sessionmaker: async_sessionmaker,
+    description: str,
+    alert: bool,
+) -> None:
+    await seed_chat(session)
+    job = await captioned_job(session)
+    telegram.errors[SendPhoto] = TelegramBadRequest(SendPhoto(chat_id=CHAT_ID, photo="x"), description)
+
+    await delivery.deliver(job.id)
+
+    assert description in (await load_job(sessionmaker, job.id)).delivery_error
+    assert len(telegram.calls(SendMessage)) == int(alert)
+
+
+async def test_a_long_flood_wait_gives_up_instead_of_holding_the_queue(
+    delivery: Delivery, telegram: FakeTelegram, sleeps: Sleeps, session: AsyncSession, sessionmaker: async_sessionmaker
+) -> None:
+    await seed_chat(session)
+    job = await captioned_job(session)
+    telegram.errors[SendPhoto] = TelegramRetryAfter(SendPhoto(chat_id=CHAT_ID, photo="x"), "flood", retry_after=3600)
+
+    await delivery.deliver(job.id)
+
+    assert sleeps.calls == []
+    assert (await load_job(sessionmaker, job.id)).delivery_error == "Telegram asked to wait 3600 s before sending more"
+    [alert] = telegram.calls(SendMessage)
+    assert "Couldn't post a caption" in alert.text
+
+
+async def test_an_unexpected_crash_is_recorded_and_not_retried(
+    delivery: Delivery,
+    telegram: FakeTelegram,
+    downloader: FakeDownloader,
+    session: AsyncSession,
+    sessionmaker: async_sessionmaker,
+) -> None:
+    await seed_chat(session)
+    job = await captioned_job(session, reply_file_id=None)
+    downloader.result = RuntimeError("boom")
+
+    await delivery.deliver(job.id)
+    await delivery.start()
+    await delivery.join()
+
+    assert (await load_job(sessionmaker, job.id)).delivery_error == "internal error: RuntimeError('boom')"
+    assert downloader.file_ids == ["file-uniq"]
+    [alert] = telegram.calls(SendMessage)
+    assert "RuntimeError" in alert.text
+
+
+async def test_a_strip_too_long_for_a_photo_goes_back_as_its_file(
+    delivery: Delivery, telegram: FakeTelegram, session: AsyncSession, sessionmaker: async_sessionmaker
+) -> None:
+    await seed_chat(session)
+    job = await captioned_job(session, media_type=MediaType.IMAGE_DOCUMENT, reply_file_id=None)
+    request = SendPhoto(chat_id=CHAT_ID, photo="x")
+    telegram.errors[SendPhoto] = TelegramBadRequest(request, "Bad Request: PHOTO_INVALID_DIMENSIONS")
+
+    await delivery.deliver(job.id)
+
+    [sent] = telegram.calls(SendDocument)
+    assert (sent.document, sent.reply_parameters.message_id) == ("file-uniq", 100)
+    stored = await load_job(sessionmaker, job.id)
+    assert (stored.reply_message_id, stored.delivery_error) == (1000, None)
+
+
+async def test_a_photo_with_bad_dimensions_is_not_resent_as_a_file(
+    delivery: Delivery, telegram: FakeTelegram, session: AsyncSession, sessionmaker: async_sessionmaker
+) -> None:
+    await seed_chat(session)
+    job = await captioned_job(session)
+    request = SendPhoto(chat_id=CHAT_ID, photo="x")
+    telegram.errors[SendPhoto] = TelegramBadRequest(request, "Bad Request: PHOTO_INVALID_DIMENSIONS")
+
+    await delivery.deliver(job.id)
+
+    assert telegram.calls(SendDocument) == []
+    assert "PHOTO_INVALID_DIMENSIONS" in (await load_job(sessionmaker, job.id)).delivery_error
+
+
+@pytest.mark.parametrize(
+    ("media", "photo_error"),
+    [
+        ({"media_type": MediaType.VIDEO_DOCUMENT, "file_size": MAX_DOWNLOAD_BYTES + 1}, None),
+        ({"media_type": MediaType.IMAGE_DOCUMENT}, "Bad Request: PHOTO_INVALID_DIMENSIONS"),
+    ],
+    ids=["video-too-big", "image-strip"],
+)
+async def test_a_spoiler_that_would_go_back_as_a_file_gets_only_its_hidden_caption(
+    delivery: Delivery, telegram: FakeTelegram, session: AsyncSession, media: dict, photo_error: str | None
+) -> None:
+    await seed_chat(session)
+    job = await captioned_job(session, reply_file_id=None, has_spoiler=True, **media)
+    if photo_error is not None:
+        telegram.errors[SendPhoto] = TelegramBadRequest(SendPhoto(chat_id=CHAT_ID, photo="x"), photo_error)
+
+    await delivery.deliver(job.id)
+
+    assert telegram.calls(SendDocument) == []
+    [reply] = telegram.calls(SendMessage)
+    assert (reply.chat_id, reply.text, reply.reply_parameters.message_id) == (CHAT_ID, SPOILER_CAPTION, 100)
+    assert reply.link_preview_options.is_disabled is True
+
+
 async def test_persistent_network_errors_give_up_and_alert_owner(
     delivery: Delivery, telegram: FakeTelegram, sleeps: Sleeps, session: AsyncSession, sessionmaker: async_sessionmaker
 ) -> None:

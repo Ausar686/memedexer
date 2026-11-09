@@ -75,7 +75,8 @@ update (photo / video / GIF / image or video document) in an approved chat
   description. The full caption is always stored in the database.
 - **Spoilers:** a reply to media sent as a spoiler is a spoiler too: the
   media is blurred and the OCR text, description and tags are hidden, since
-  they give it away just as much.
+  they give it away just as much. Media that would go back as a file (which
+  can't be blurred) is left out: the reply is the hidden caption alone.
 - **Edits:** when an edit replaces the media, the new media is captioned and
   the existing reply is edited to show it with the new caption (a new reply
   only if the old one is gone), so edits can't make the bot spam the chat.
@@ -103,9 +104,9 @@ update (photo / video / GIF / image or video document) in an approved chat
   attempt: it fails instead, so a file that crashes the process can't take
   the bot down on every restart.
 - **Failures:** silent in the chat; refusals, exhausted retries and replies
-  that couldn't be posted are reported to the owner by DM (identical alerts at
-  most hourly). Replies interrupted by a restart are retried if they finished
-  within the last 24 h.
+  that couldn't be posted (except when the original is gone) are reported to
+  the owner by DM (identical alerts at most hourly). Replies interrupted by a
+  restart are retried if they finished within the last 24 h.
 - **Secrets:** credentials are masked in logs, in errors stored on jobs and
   in owner DMs (file URLs embed the bot token). The bot process is
   non-dumpable, so other processes of its user, like the video decoder, can't

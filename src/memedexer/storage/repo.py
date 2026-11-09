@@ -87,11 +87,16 @@ async def upsert_media(
     thumbnail_file_id: str | None = None,
     reply_file_id: str | None = None,
 ) -> Media:
-    """`file_id` rotates over time for the same file, so the latest one wins; a known `reply_file_id` is kept."""
+    """`file_id` rotates over time for the same file, so the latest one wins; a known `reply_file_id` is kept while
+    the media type stays the same."""
     media = await session.get(Media, file_unique_id)
     if media is None:
         media = Media(file_unique_id=file_unique_id)
         session.add(media)
+    if media.media_type is not media_type:
+        # The same file seen as another kind (a GIF re-sent as a video document): a stored reply id of the old kind
+        # doesn't work with the new kind's send method.
+        media.reply_file_id = reply_file_id
     media.file_id = file_id
     media.media_type = media_type
     media.mime_type = mime_type

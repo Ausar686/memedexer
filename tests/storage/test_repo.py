@@ -299,6 +299,26 @@ async def test_upsert_media_keeps_known_reply_file_id(session: AsyncSession) -> 
     )
 
 
+async def test_upsert_media_drops_the_reply_file_id_when_the_kind_changes(session: AsyncSession) -> None:
+    async def upsert(media_type: MediaType, reply_file_id: str | None) -> object:
+        return await repo.upsert_media(
+            session,
+            file_unique_id="g",
+            file_id="f",
+            media_type=media_type,
+            mime_type="video/mp4",
+            width=None,
+            height=None,
+            file_size=1,
+            reply_file_id=reply_file_id,
+        )
+
+    await upsert(MediaType.ANIMATION, "animation-id")
+
+    # An animation's id doesn't work with sendVideo, which a video document's reply uses.
+    assert (await upsert(MediaType.VIDEO_DOCUMENT, None)).reply_file_id is None
+
+
 async def test_undelivered_jobs(session: AsyncSession) -> None:
     await _chat(session)
     await _media(session)

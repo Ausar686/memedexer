@@ -23,7 +23,12 @@ helpers.
   videos by their own id, so they are downloaded and uploaded once (an image
   prepared like for captioning, a video as is); the resulting file id is
   stored so later replies reuse it. A video document over the download limit
-  goes back as a document (`sendDocument`).
+  goes back as a document (`sendDocument`), and so does an image document
+  Telegram refuses as a photo (`PHOTO_INVALID_DIMENSIONS`: photos are
+  limited to a 20:1 side ratio, and long strips exceed it).
+- A spoiler that would go back as a file gets a text-only reply with the
+  hidden caption instead (link previews off): a file can't be blurred, and
+  its preview would show what the spoiler hides.
 - Spoilers: a job with `has_spoiler` gets a blurred photo, and every caption
   part is wrapped in `<tg-spoiler>` (the markup doesn't count towards the
   limit below). `hide_replies(chat_id, message_id)` handles a source that
@@ -49,10 +54,17 @@ helpers.
   the last 24 h, so a restart doesn't lose replies.
 - `close(timeout)` lets queued replies finish before stopping the idle queue
   tasks; replies still pending at the deadline are retried by `start()`.
-- `RetryAfter` waits the time Telegram asks for. Network/server errors and
+- `RetryAfter` waits the time Telegram asks for, up to
+  `MAX_RETRY_AFTER_SECONDS` (60 s); a longer flood wait gives up and alerts
+  the owner rather than hold the chat's queue. Network/server errors and
   retryable download errors back off (5 s × attempt, up to
   `MAX_SEND_ATTEMPTS`), then give up and alert the owner.
-- A bad request (e.g. the original was deleted) or lost access gives up quietly.
+- A bad request whose target is gone (`TARGET_GONE`: the original, its topic
+  or the reply to edit was deleted, the topic is closed, the chat is gone) or
+  lost access gives up quietly. Any other bad request (a malformed caption, a
+  wrong file id, missing rights) gives up and alerts the owner.
+- Any other exception while posting is recorded as `delivery_error` and
+  alerted too, so the reply isn't retried on every restart.
 - Hiding a reply uses the same retries; when they run out the owner is
   alerted, and a reply that is gone is skipped quietly.
 

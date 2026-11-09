@@ -19,6 +19,7 @@ from aiogram.types import (
     InputMediaDocument,
     InputMediaPhoto,
     InputMediaVideo,
+    LinkPreviewOptions,
     Message,
     ReplyParameters,
 )
@@ -58,6 +59,21 @@ ALERT_INTERVAL_SECONDS = 60 * 60
 ALERT_ERROR_CHARS = 500
 CLOSE_TIMEOUT_SECONDS = 10.0
 VIDEO_EXTENSIONS = {"video/quicktime": "mov", "video/webm": "webm", "video/x-matroska": "mkv"}
+# A flood wait longer than this would hold the chat's queue for that long; give up and tell the owner instead.
+MAX_RETRY_AFTER_SECONDS = 60
+# Telegram's descriptions (lowercased) for a reply whose target is gone: the original, its topic or the reply to edit
+# was deleted, or the chat can't be seen any more. Nothing to retry and nothing the owner must do; any other rejection
+# is a bug or a setup problem the owner should hear about.
+TARGET_GONE = (
+    "message to be replied not found",
+    "replied message not found",
+    "message to edit not found",
+    "message can't be edited",
+    "message thread not found",
+    "topic_deleted",
+    "topic_closed",
+    "chat not found",
+)
 
 
 class DeliveryFailed(Exception):
@@ -176,7 +192,13 @@ class Delivery:
         caption_html = _caption_html(caption, spoiler=job.has_spoiler)
         try:
             reply_message_id, sent = await self._post(job, media, caption_html, previous)
-        except DeliveryFailed as exc:
+        except Exception as error:
+            if isinstance(error, DeliveryFailed):
+                exc = error
+            else:
+                # Recorded like any failure, so the reply isn't retried on every restart.
+                log.exception("delivering job %d crashed", job_id)
+                exc = DeliveryFailed(f"internal error: {error!r}", alert=True)
             async with self._sessionmaker() as session:
                 stored = await session.get(Job, job_id)
                 stored.delivery_error = str(exc)
@@ -299,15 +321,20 @@ class Delivery:
                 case MediaType.PHOTO | MediaType.IMAGE_DOCUMENT:
                     photo = media.reply_file_id or await self._upload_image(media)
                     await self._throttle.wait(job.chat_id)
-                    return await self._bot.send_photo(photo=photo, has_spoiler=job.has_spoiler, **reply)
+                    try:
+                        return await self._bot.send_photo(photo=photo, has_spoiler=job.has_spoiler, **reply)
+                    except TelegramBadRequest as exc:
+                        # Photos are limited to a 20:1 side ratio; a long strip sent as a file goes back as one.
+                        if media.media_type is MediaType.PHOTO or "photo_invalid_dimensions" not in exc.message.lower():
+                            raise
+                    return await self._send_file(job, media.file_id, reply)
                 case MediaType.ANIMATION:
                     await self._throttle.wait(job.chat_id)
                     return await self._bot.send_animation(
                         animation=media.reply_file_id, has_spoiler=job.has_spoiler, **reply
                     )
                 case MediaType.VIDEO_DOCUMENT if _goes_back_as_document(job, media):
-                    await self._throttle.wait(job.chat_id)
-                    return await self._bot.send_document(document=media.file_id, **reply)
+                    return await self._send_file(job, media.file_id, reply)
                 case MediaType.VIDEO | MediaType.VIDEO_DOCUMENT:
                     video = media.reply_file_id or await self._upload_video(media)
                     await self._throttle.wait(job.chat_id)
@@ -315,17 +342,31 @@ class Delivery:
 
         return await self._with_retries(send)
 
+    async def _send_file(self, job: Job, file_id: str, reply: dict[str, t.Any]) -> Message:
+        """Send media back as the file it came as, or for a spoiler only the hidden caption: a file can't be blurred,
+        and its preview would show what the spoiler hides."""
+        await self._throttle.wait(job.chat_id)
+        if not job.has_spoiler:
+            return await self._bot.send_document(document=file_id, **reply)
+        text = {key: value for key, value in reply.items() if key != "caption"} | {"text": reply["caption"]}
+        return await self._bot.send_message(link_preview_options=LinkPreviewOptions(is_disabled=True), **text)
+
     async def _with_retries[T](self, call: t.Callable[[], t.Awaitable[T]]) -> T:
         last_error: Exception | None = None
         for attempt in range(1, MAX_SEND_ATTEMPTS + 1):
             try:
                 return await call()
             except TelegramRetryAfter as exc:
+                if exc.retry_after > MAX_RETRY_AFTER_SECONDS:
+                    message = f"Telegram asked to wait {exc.retry_after} s before sending more"
+                    raise DeliveryFailed(message, alert=True) from exc
                 last_error = exc
                 await self._sleep(exc.retry_after)
-            except (TelegramBadRequest, TelegramForbiddenError) as exc:
-                # The original was deleted or the bot lost access: nothing to retry and nothing the owner must do.
+            except TelegramForbiddenError as exc:
+                # The bot was removed from the chat; membership updates take care of that.
                 raise self._failed(str(exc), alert=False) from exc
+            except TelegramBadRequest as exc:
+                raise self._failed(str(exc), alert=not _target_gone(exc)) from exc
             except (ImageError, DownloadError) as exc:
                 if isinstance(exc, ImageError) or not exc.retryable:
                     raise self._failed(str(exc), alert=True) from exc
@@ -413,6 +454,11 @@ class Delivery:
 
 def _caption_html(caption: Caption, *, spoiler: bool) -> str:
     return format_caption(caption.text, caption.description, caption.tags, spoiler=spoiler)
+
+
+def _target_gone(exc: TelegramBadRequest) -> bool:
+    description = exc.message.lower()
+    return any(reason in description for reason in TARGET_GONE)
 
 
 def _goes_back_as_document(job: Job, media: Media) -> bool:
