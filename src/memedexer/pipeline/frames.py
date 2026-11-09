@@ -1,25 +1,15 @@
-"""Child process that samples frames from an untrusted video; run only through `video.extract_frames`.
+"""Sample frames from a video with PyAV; runs only inside the `decoder` child process."""
 
-Reads the video from stdin and writes the frames to stdout in `video.write_frames` framing.
-"""
-
-import argparse
 import io
-import resource
-import sys
 
 import av
 import PIL.Image
 import PIL.ImageChops
 import PIL.ImageStat
 
-from memedexer.pipeline.images import MAX_SIDE, encode_jpeg
-from memedexer.pipeline.video import FRAME_POSITIONS, write_frames
+from memedexer.pipeline.images import MAX_SIDE
+from memedexer.pipeline.sandbox import FRAME_POSITIONS
 
-MEMORY_LIMIT_BYTES = 1024 * 1024 * 1024
-CPU_LIMIT_SECONDS = 10
-# Enough for the interpreter's own imports; the decoder itself reads only from stdin.
-OPEN_FILES_LIMIT = 32
 # FFmpeg demuxers (by any of their names) for the containers people send videos and GIFs in. FFmpeg can parse hundreds
 # more, including playlists that reference other files; each one is attack surface no meme needs.
 DEMUXERS = ("mov", "matroska", "avi", "mpegts", "mpeg", "flv", "asf", "gif", "h264", "hevc")
@@ -29,17 +19,15 @@ DUPLICATE_THRESHOLD = 6.0
 _FINGERPRINT_SIZE = (16, 16)
 
 
-def main() -> None:
-    _limit_resources()
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--duration", type=float, default=None)
-    args = parser.parse_args()
-    pictures = sample_frames(sys.stdin.buffer.read(), args.duration)
-    write_frames(sys.stdout.buffer, [encode_jpeg(picture).data for picture in pictures])
-    return None
-
-
 def sample_frames(data: bytes, duration_hint: float | None = None) -> list[PIL.Image.Image]:
+    """Up to `len(FRAME_POSITIONS)` distinct, upright pictures; `ValueError` when the video can't be decoded."""
+    try:
+        return _sample(data, duration_hint)
+    except av.FFmpegError as exc:
+        raise ValueError(exc.strerror or str(exc)) from exc
+
+
+def _sample(data: bytes, duration_hint: float | None) -> list[PIL.Image.Image]:
     with _open(data) as container:
         if not container.streams.video:
             raise ValueError("no video stream")
@@ -131,20 +119,3 @@ def _upright(frame: av.VideoFrame) -> PIL.Image.Image:
     picture = frame.to_image(width=max(1, round(frame.width * scale)), height=max(1, round(frame.height * scale)))
     # Phones store portrait video sideways plus a display rotation, counter-clockwise in degrees.
     return picture.rotate(frame.rotation, expand=True) if frame.rotation else picture
-
-
-def _limit_resources() -> None:
-    resource.setrlimit(resource.RLIMIT_CPU, (CPU_LIMIT_SECONDS, CPU_LIMIT_SECONDS + 1))
-    # No file writes at all (pipes are unaffected), so a compromised decoder can't tamper with the database.
-    resource.setrlimit(resource.RLIMIT_FSIZE, (0, 0))
-    resource.setrlimit(resource.RLIMIT_NOFILE, (OPEN_FILES_LIMIT, OPEN_FILES_LIMIT))
-    try:
-        resource.setrlimit(resource.RLIMIT_AS, (MEMORY_LIMIT_BYTES, MEMORY_LIMIT_BYTES))
-    except ValueError:
-        # macOS refuses to lower RLIMIT_AS; the limit matters on Linux, where the bot runs.
-        pass
-    return None
-
-
-if __name__ == "__main__":
-    main()

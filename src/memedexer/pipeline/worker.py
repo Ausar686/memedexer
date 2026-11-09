@@ -11,9 +11,9 @@ from memedexer.captioning.base import CaptionError, CaptionProvider, CaptionRefu
 from memedexer.captioning.catalog import ModelSpec, cost_microusd
 from memedexer.config import Provider, Settings
 from memedexer.pipeline import budget
-from memedexer.pipeline.images import ImageError, prepare_image
+from memedexer.pipeline.images import ImageError
 from memedexer.pipeline.resolve import resolve_caption_settings
-from memedexer.pipeline.video import VideoError, extract_frames
+from memedexer.pipeline.sandbox import VideoError, extract_frames, prepare_image
 from memedexer.redaction import redact
 from memedexer.storage import repo
 from memedexer.storage.models import (
@@ -215,13 +215,13 @@ class Worker:
         """The picture to caption, or a video's sampled frames (its thumbnail when it's too big to download)."""
         if media.media_type not in VIDEO_MEDIA_TYPES:
             data = await self._downloader.download(media.file_id)
-            return [await asyncio.to_thread(prepare_image, data, media.mime_type)]
+            return [await prepare_image(data)]
         if over_download_limit(media.file_size):
             if media.thumbnail_file_id is None:
                 raise VideoError("the video is over the Bot API's 20 MB download limit and has no thumbnail")
             job.thumbnail_only = True
             data = await self._downloader.download(media.thumbnail_file_id)
-            return [await asyncio.to_thread(prepare_image, data, "image/jpeg")]
+            return [await prepare_image(data)]
         data = await self._downloader.download(media.file_id)
         return await extract_frames(data, media.duration)
 
