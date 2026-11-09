@@ -1,7 +1,9 @@
 """The decoder's own logic, run in-process; `test_video` covers it through the real child process."""
 
 import io
+import pathlib
 import resource
+import subprocess
 import sys
 
 import PIL.Image
@@ -57,6 +59,8 @@ def test_main_limits_resources_and_writes_framed_jpegs(monkeypatch: pytest.Monke
 
     assert limits[resource.RLIMIT_CPU] == (frames.CPU_LIMIT_SECONDS, frames.CPU_LIMIT_SECONDS + 1)
     assert limits[resource.RLIMIT_AS] == (frames.MEMORY_LIMIT_BYTES, frames.MEMORY_LIMIT_BYTES)
+    assert limits[resource.RLIMIT_FSIZE] == (0, 0)
+    assert limits[resource.RLIMIT_NOFILE] == (frames.OPEN_FILES_LIMIT, frames.OPEN_FILES_LIMIT)
     decoded = [PIL.Image.open(io.BytesIO(frame)) for frame in read_frames(stdout.getvalue())]
     assert [(picture.format, corner(picture)) for picture in decoded] == [
         ("JPEG", "green"),
@@ -77,4 +81,29 @@ def test_memory_limit_is_skipped_where_the_os_refuses_it(monkeypatch: pytest.Mon
 
     frames._limit_resources()
 
-    assert applied == [resource.RLIMIT_CPU]
+    assert applied == [resource.RLIMIT_CPU, resource.RLIMIT_FSIZE, resource.RLIMIT_NOFILE]
+
+
+@pytest.mark.parametrize("container", ["mp4", "mov", "matroska", "avi", "mpegts", "mpeg", "flv", "asf", "h264"])
+def test_common_containers_are_allowed(container: str) -> None:
+    with frames._open(videos.clip(["red"], container=container)) as opened:
+        assert opened.streams.video
+
+
+def test_other_containers_are_refused() -> None:
+    with pytest.raises(ValueError, match="unsupported container format"):
+        frames.sample_frames(videos.clip(["red"], container="nut"))
+
+
+def test_limited_child_cannot_write_files(tmp_path: pathlib.Path) -> None:
+    target = tmp_path / "db"
+    target.write_bytes(b"")
+    script = (
+        "from memedexer.pipeline.frames import _limit_resources; _limit_resources(); "
+        f"open({str(target)!r}, 'ab', buffering=0).write(b'x')"
+    )
+
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True)
+
+    assert b"File too large" in result.stderr
+    assert target.read_bytes() == b""

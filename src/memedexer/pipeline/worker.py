@@ -14,6 +14,7 @@ from memedexer.pipeline import budget
 from memedexer.pipeline.images import ImageError, prepare_image
 from memedexer.pipeline.resolve import resolve_caption_settings
 from memedexer.pipeline.video import VideoError, extract_frames
+from memedexer.redaction import redact
 from memedexer.storage import repo
 from memedexer.storage.models import (
     TERMINAL_JOB_STATUSES,
@@ -132,7 +133,8 @@ class Worker:
                 log.exception("job %d crashed", job.id)
                 await session.rollback()
                 job = await session.get(Job, job.id)
-                repo.finish_job(job, JobStatus.FAILED, error=f"internal error: {exc!r}")
+                error = redact(f"internal error: {exc!r}", self._settings.secret_values)
+                repo.finish_job(job, JobStatus.FAILED, error=error)
             await session.commit()
         if job.status in TERMINAL_JOB_STATUSES:
             await self._notify_listener(job)

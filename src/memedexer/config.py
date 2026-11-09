@@ -2,6 +2,7 @@
 
 import decimal
 import enum
+import urllib.parse
 
 import pydantic
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -43,6 +44,15 @@ class Settings(DatabaseSettings):
     def api_key(self, provider: Provider) -> pydantic.SecretStr | None:
         keys = {Provider.ANTHROPIC: self.anthropic_api_key, Provider.OPENAI: self.openai_api_key}
         return keys[provider]
+
+    @property
+    def secret_values(self) -> list[str]:
+        """Every configured credential, for redaction."""
+        secrets = [self.telegram_bot_token, self.anthropic_api_key, self.openai_api_key]
+        values = [secret.get_secret_value() for secret in secrets if secret is not None]
+        if password := urllib.parse.urlsplit(self.database_url.get_secret_value()).password:
+            values.append(password)
+        return values
 
     @property
     def available_providers(self) -> frozenset[Provider]:

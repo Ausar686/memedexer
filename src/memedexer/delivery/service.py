@@ -30,6 +30,7 @@ from memedexer.delivery.throttle import Throttle
 from memedexer.pipeline import budget
 from memedexer.pipeline.images import ImageError, prepare_image
 from memedexer.pipeline.worker import Downloader, DownloadError, over_download_limit
+from memedexer.redaction import redact
 from memedexer.storage import repo
 from memedexer.storage.models import (
     NO_TOPIC,
@@ -322,16 +323,20 @@ class Delivery:
                 await self._sleep(exc.retry_after)
             except (TelegramBadRequest, TelegramForbiddenError) as exc:
                 # The original was deleted or the bot lost access: nothing to retry and nothing the owner must do.
-                raise DeliveryFailed(str(exc), alert=False) from exc
+                raise self._failed(str(exc), alert=False) from exc
             except (ImageError, DownloadError) as exc:
                 if isinstance(exc, ImageError) or not exc.retryable:
-                    raise DeliveryFailed(str(exc), alert=True) from exc
+                    raise self._failed(str(exc), alert=True) from exc
                 last_error = exc
                 await self._sleep(SEND_RETRY_SECONDS * attempt)
             except (TelegramAPIError, aiohttp.ClientError, TimeoutError) as exc:
                 last_error = exc
                 await self._sleep(SEND_RETRY_SECONDS * attempt)
-        raise DeliveryFailed(f"gave up after {MAX_SEND_ATTEMPTS} attempts: {last_error}", alert=True)
+        raise self._failed(f"gave up after {MAX_SEND_ATTEMPTS} attempts: {last_error}", alert=True)
+
+    def _failed(self, message: str, *, alert: bool) -> DeliveryFailed:
+        # Stored on the job and sent to the owner; network errors can carry Bot API URLs, which embed the token.
+        return DeliveryFailed(redact(message, [self._bot.token]), alert=alert)
 
     async def _upload_image(self, media: Media) -> InputFile:
         """Image documents can't be re-sent as photos by file id, so upload the prepared image once."""

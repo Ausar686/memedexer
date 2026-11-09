@@ -93,8 +93,9 @@ async def test_text_survives_into_the_frames() -> None:
         (b"not a video", "cannot decode video: av.error.InvalidDataError"),
         (b"", "cannot decode video: av.error.InvalidDataError"),
         (videos.audio_only(), "cannot decode video: ValueError: no video stream"),
+        (videos.clip(["red"], container="nut"), "cannot decode video: ValueError: unsupported container format"),
     ],
-    ids=["garbage", "empty", "audio-only"],
+    ids=["garbage", "empty", "audio-only", "unsupported-container"],
 )
 async def test_undecodable_input_is_a_video_error(data: bytes, message: str) -> None:
     with pytest.raises(VideoError, match=message):
@@ -146,6 +147,48 @@ async def test_duration_hint_is_passed_to_the_decoder(command) -> None:
 
     with pytest.raises(VideoError, match="--duration 12.0"):
         await extract_frames(b"video", 12.0)
+
+
+async def test_a_flooding_decoder_is_stopped(command) -> None:
+    started = command("import sys\nwhile True: sys.stdout.buffer.write(bytes(1 << 20))")
+
+    with pytest.raises(VideoError, match="output is too large"):
+        await extract_frames(b"video")
+
+    assert started[0].returncode is not None
+
+
+async def test_a_decoder_that_floods_then_hangs_is_stopped(command) -> None:
+    started = command("import sys, time; sys.stdout.buffer.write(bytes(1 << 20)); sys.stdout.flush(); time.sleep(60)")
+
+    with pytest.raises(VideoError, match="took longer"):
+        await extract_frames(b"video")
+
+    assert started[0].returncode is not None
+
+
+async def test_processes_the_decoder_starts_are_killed_with_it(command, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The grandchild inherits the pipes; if it survived, reading them would never end.
+    command("import subprocess, sys, time; subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); "
+            "time.sleep(60)")
+    monkeypatch.setattr(video, "DECODE_TIMEOUT_SECONDS", 0.5)
+
+    with pytest.raises(VideoError, match="took longer"):
+        await asyncio.wait_for(extract_frames(b"video"), 5)
+
+
+async def test_only_the_tail_of_a_long_error_is_kept(command) -> None:
+    command("import sys; sys.stderr.write('noise\\n' * 100_000 + 'the real error'); sys.exit(1)")
+
+    with pytest.raises(VideoError, match="cannot decode video: the real error$"):
+        await extract_frames(b"video")
+
+
+async def test_a_decoder_that_ignores_its_input_is_not_an_error_by_itself(command) -> None:
+    command("import sys; sys.exit(2)")
+
+    with pytest.raises(VideoError, match="decoder exited with 2"):
+        await extract_frames(bytes(10 << 20))
 
 
 def frame_bytes(*frames: bytes) -> bytes:

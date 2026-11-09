@@ -18,6 +18,11 @@ from memedexer.pipeline.video import FRAME_POSITIONS, write_frames
 
 MEMORY_LIMIT_BYTES = 1024 * 1024 * 1024
 CPU_LIMIT_SECONDS = 10
+# Enough for the interpreter's own imports; the decoder itself reads only from stdin.
+OPEN_FILES_LIMIT = 32
+# FFmpeg demuxers (by any of their names) for the containers people send videos and GIFs in. FFmpeg can parse hundreds
+# more, including playlists that reference other files; each one is attack surface no meme needs.
+DEMUXERS = ("mov", "matroska", "avi", "mpegts", "mpeg", "flv", "asf", "gif", "h264", "hevc")
 # Mean per-channel difference (0-255) between 16×16 colour thumbnails below which two frames show the same picture,
 # e.g. a still image with music. Colour, since different hues can share a grayscale level.
 DUPLICATE_THRESHOLD = 6.0
@@ -35,7 +40,7 @@ def main() -> None:
 
 
 def sample_frames(data: bytes, duration_hint: float | None = None) -> list[PIL.Image.Image]:
-    with av.open(io.BytesIO(data)) as container:
+    with _open(data) as container:
         if not container.streams.video:
             raise ValueError("no video stream")
         stream = container.streams.video[0]
@@ -71,6 +76,14 @@ def _difference(a: PIL.Image.Image, b: PIL.Image.Image) -> float:
     return sum(channels) / len(channels)
 
 
+def _open(data: bytes) -> av.container.InputContainer:
+    try:
+        return av.open(io.BytesIO(data), options={"format_whitelist": ",".join(DEMUXERS)})
+    except av.ArgumentError as exc:
+        # FFmpeg reports a recognised but non-allowlisted container as an invalid argument.
+        raise ValueError("unsupported container format") from exc
+
+
 def _duration(container: av.container.InputContainer, stream: av.VideoStream) -> float | None:
     if stream.duration is not None:
         return float(stream.duration * stream.time_base)
@@ -96,7 +109,7 @@ def _scan(data: bytes, targets: list[float]) -> list[PIL.Image.Image]:
     pictures: list[PIL.Image.Image] = []
     pending = list(targets)
     last = None
-    with av.open(io.BytesIO(data)) as container:
+    with _open(data) as container:
         stream = container.streams.video[0]
         rate = stream.guessed_rate or stream.average_rate
         for index, frame in enumerate(container.decode(stream)):
@@ -122,6 +135,9 @@ def _upright(frame: av.VideoFrame) -> PIL.Image.Image:
 
 def _limit_resources() -> None:
     resource.setrlimit(resource.RLIMIT_CPU, (CPU_LIMIT_SECONDS, CPU_LIMIT_SECONDS + 1))
+    # No file writes at all (pipes are unaffected), so a compromised decoder can't tamper with the database.
+    resource.setrlimit(resource.RLIMIT_FSIZE, (0, 0))
+    resource.setrlimit(resource.RLIMIT_NOFILE, (OPEN_FILES_LIMIT, OPEN_FILES_LIMIT))
     try:
         resource.setrlimit(resource.RLIMIT_AS, (MEMORY_LIMIT_BYTES, MEMORY_LIMIT_BYTES))
     except ValueError:

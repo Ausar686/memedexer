@@ -42,11 +42,20 @@ For each claimed job the worker, in order:
   frame times from the frame rate when frames carry no timestamps.
 - Isolation: decoding untrusted video runs FFmpeg's native code (via PyAV),
   so it happens in a fresh `python -I -m memedexer.pipeline.frames` process
-  per video, with an empty environment (no tokens), `RLIMIT_AS` 1 GiB (Linux),
-  `RLIMIT_CPU` 10 s and a 15 s wall-clock timeout. The child is killed on
-  timeout or when the job is cancelled; its output is length-framed JPEGs
-  that the parent checks (count, size) before use. Any failure is a
-  non-retryable `VideoError`. The bot process never imports PyAV.
+  per video, in its own process group, with:
+  - an empty environment (no tokens); the bot process is also non-dumpable
+    (`app.forbid_inspection`), so the child can't read the bot's environment
+    or memory through `/proc` either;
+  - `RLIMIT_AS` 1 GiB (Linux), `RLIMIT_CPU` 10 s, `RLIMIT_FSIZE` 0 (no file
+    writes) and a small `RLIMIT_NOFILE`, plus a 15 s wall-clock timeout;
+  - only the demuxers in `frames.DEMUXERS` (MP4/MOV, Matroska/WebM, AVI,
+    MPEG-TS/PS, FLV, ASF, GIF, raw H.264/HEVC); anything else is refused.
+
+  The whole group is killed on timeout or when the job is cancelled. The
+  parent reads at most `video.MAX_OUTPUT_BYTES` of output and the tail of
+  stderr; the output is length-framed JPEGs that it checks (count, size)
+  before use. Any failure is a non-retryable `VideoError`. The bot process
+  never imports PyAV.
 
 ## Retries
 - Retryable download or provider errors put the job back to `pending` with

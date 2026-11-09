@@ -612,6 +612,22 @@ async def test_persistent_network_errors_give_up_and_alert_owner(
     assert f"https://t.me/c/{str(CHAT_ID)[4:]}/100" in alert.text
 
 
+async def test_errors_carrying_bot_api_urls_are_stored_and_sent_without_the_token(
+    delivery: Delivery, telegram: FakeTelegram, session: AsyncSession, sessionmaker: async_sessionmaker
+) -> None:
+    await seed_chat(session)
+    job = await captioned_job(session)
+    url = "https://api.telegram.org/bot42:TEST/sendPhoto"
+    telegram.errors[SendPhoto] = TelegramNetworkError(SendPhoto(chat_id=CHAT_ID, photo="x"), f"redirected to {url}")
+
+    await delivery.deliver(job.id)
+
+    stored = (await load_job(sessionmaker, job.id)).delivery_error
+    [alert] = telegram.calls(SendMessage)
+    assert "42:TEST" not in stored + alert.text
+    assert "https://api.telegram.org/bot&lt;redacted&gt;/sendPhoto" in alert.text
+
+
 async def test_broken_document_alerts_owner(
     delivery: Delivery, telegram: FakeTelegram, downloader: FakeDownloader, session: AsyncSession
 ) -> None:

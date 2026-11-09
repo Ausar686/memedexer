@@ -1,5 +1,7 @@
 import asyncio
 import pathlib
+import subprocess
+import sys
 
 import pydantic
 import pytest
@@ -94,3 +96,26 @@ async def test_worker_crash_stops_polling_and_propagates(
         await asyncio.wait_for(app.run(app_settings), timeout=5)
 
     assert stopped.is_set()
+
+
+PARENT = """
+import os, subprocess, sys
+from memedexer.app import forbid_inspection
+forbid_inspection()
+child = "import os; open(f'/proc/{os.getppid()}/environ', 'rb').read()"
+sys.exit(subprocess.run([sys.executable, "-I", "-c", child], env={}, capture_output=True).returncode)
+"""
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="/proc and prctl are Linux-only")
+def test_a_child_process_cannot_read_the_bot_environment() -> None:
+    result = subprocess.run([sys.executable, "-c", PARENT], env={"SECRET": "1:A"}, capture_output=True)
+
+    assert result.returncode == 1
+
+
+def test_inspection_guard_is_a_no_op_off_linux(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(app.ctypes, "CDLL", None)
+
+    assert app.forbid_inspection() is None

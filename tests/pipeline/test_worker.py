@@ -359,6 +359,21 @@ async def test_unexpected_exception_fails_job_and_keeps_worker_alive(
     assert "boom" in failed.error
 
 
+async def test_unexpected_exception_text_is_stored_without_secrets(
+    session: AsyncSession, sessionmaker: async_sessionmaker[AsyncSession], settings: Settings
+) -> None:
+    await seed_chat(session)
+    job = await seed_job(session)
+    leak = RuntimeError(f"GET https://api.telegram.org/file/bot{settings.telegram_bot_token.get_secret_value()}/x")
+    worker = make_worker(sessionmaker, settings, FakeProvider(leak))
+
+    await worker.run_once()
+
+    assert (await load_job(sessionmaker, job.id)).error == (
+        "internal error: RuntimeError('GET https://api.telegram.org/file/bot<redacted>/x')"
+    )
+
+
 async def test_listener_failure_does_not_break_processing(
     session: AsyncSession, sessionmaker: async_sessionmaker[AsyncSession], settings: Settings
 ) -> None:

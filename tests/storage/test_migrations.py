@@ -152,3 +152,42 @@ async def test_0006_types_existing_media_and_keeps_reply_file_ids(database_url: 
         ).all()
     await engine.dispose()
     assert [tuple(row) for row in rows] == [("doc", "image_document", "uploaded"), ("photo", "photo", "photo-file")]
+
+
+async def test_0007_redacts_bot_tokens_from_stored_errors(database_url: str) -> None:
+    engine = db.create_engine(database_url)
+    await db.upgrade(engine, "0006")
+    leaked = "download failed: 404, message='Not Found', url='https://api.telegram.org/file/bot123:AA-b_C/videos/x.mp4'"
+    async with engine.begin() as connection:
+        await connection.execute(
+            sa.text(
+                "INSERT INTO chats (id, is_forum, status, created_at, updated_at) "
+                "VALUES (-1, 0, 'approved', '2026-10-01 00:00:00', '2026-10-01 00:00:00')"
+            )
+        )
+        await connection.execute(
+            sa.text(
+                "INSERT INTO media (file_unique_id, file_id, media_type, mime_type, created_at) "
+                "VALUES ('u', 'f', 'video', 'video/mp4', '2026-10-01 00:00:00')"
+            )
+        )
+        await connection.execute(
+            sa.text(
+                "INSERT INTO jobs (id, chat_id, thread_id, message_id, file_unique_id, trigger, status, attempts, "
+                "input_tokens, output_tokens, cost_microusd, available_at, created_at, updated_at, error, "
+                "delivery_error) VALUES "
+                "(1, -1, 0, 1, 'u', 'message', 'failed', 4, 0, 0, 0, '2026-10-01 00:00:00', '2026-10-01 00:00:00', "
+                "'2026-10-01 00:00:00', :leaked, NULL), "
+                "(2, -1, 0, 2, 'u', 'message', 'done', 1, 0, 0, 0, '2026-10-01 00:00:00', '2026-10-01 00:00:00', "
+                "'2026-10-01 00:00:00', 'see /bot help: x', :leaked)"
+            ),
+            {"leaked": leaked},
+        )
+
+    await db.upgrade(engine)
+
+    async with engine.connect() as connection:
+        rows = (await connection.execute(sa.text("SELECT error, delivery_error FROM jobs ORDER BY id"))).all()
+    await engine.dispose()
+    redacted = leaked.replace("bot123:AA-b_C", "bot<redacted>")
+    assert [tuple(row) for row in rows] == [(redacted, None), ("see /bot help: x", redacted)]
