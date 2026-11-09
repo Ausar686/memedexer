@@ -32,12 +32,16 @@ class FakeProvider:
 
 
 class FakeDownloader:
-    def __init__(self, result: bytes | Exception = MEME) -> None:
+    """Returns `result` for every file, or the entry of `per_file` for the file ids it lists."""
+
+    def __init__(self, result: bytes | Exception = MEME, per_file: dict[str, bytes | Exception] | None = None) -> None:
         self.result = result
+        self.per_file = per_file or {}
         self.file_ids: list[str] = []
 
     async def download(self, file_id: str) -> bytes:
         self.file_ids.append(file_id)
-        if isinstance(self.result, Exception):
-            raise self.result
-        return self.result
+        result = self.per_file.get(file_id, self.result)
+        if isinstance(result, Exception):
+            raise result
+        return result

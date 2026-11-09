@@ -125,6 +125,38 @@ async def test_video_over_the_download_limit_is_captioned_from_its_thumbnail(
     assert len(provider.calls[0][0]) == 1
 
 
+@pytest.mark.parametrize("media_type", [MediaType.VIDEO, MediaType.VIDEO_DOCUMENT])
+async def test_video_telegram_refuses_as_too_big_falls_back_to_its_thumbnail(
+    session: AsyncSession, sessionmaker: async_sessionmaker[AsyncSession], settings: Settings, media_type: MediaType
+) -> None:
+    await seed_chat(session)
+    # No stated size, so only Telegram's refusal tells that the file is over the limit.
+    job = await seed_job(
+        session, media_type=media_type, mime_type="video/mp4", file_size=None, thumbnail_file_id="thumb"
+    )
+    refused = DownloadError("telegram rejected the download: file is too big", retryable=False, too_big=True)
+    provider, downloader = FakeProvider(caption_result()), FakeDownloader(per_file={"file-uniq": refused})
+
+    await make_worker(sessionmaker, settings, provider, downloader).run_once()
+
+    done = await load_job(sessionmaker, job.id)
+    assert (done.status, done.thumbnail_only) == (JobStatus.DONE, True)
+    assert downloader.file_ids == ["file-uniq", "thumb"]
+
+
+async def test_other_refused_video_downloads_still_fail(
+    session: AsyncSession, sessionmaker: async_sessionmaker[AsyncSession], settings: Settings
+) -> None:
+    await seed_chat(session)
+    job = await seed_job(session, media_type=MediaType.VIDEO, mime_type="video/mp4", thumbnail_file_id="thumb")
+    refused = DownloadError("telegram rejected the download: wrong file_id", retryable=False)
+
+    await make_worker(sessionmaker, settings, FakeProvider(caption_result()), FakeDownloader(refused)).run_once()
+
+    failed = await load_job(sessionmaker, job.id)
+    assert (failed.status, failed.thumbnail_only, failed.error) == (JobStatus.FAILED, False, str(refused))
+
+
 async def test_video_over_the_download_limit_without_thumbnail_fails(
     session: AsyncSession, sessionmaker: async_sessionmaker[AsyncSession], settings: Settings
 ) -> None:

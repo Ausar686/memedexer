@@ -1,5 +1,6 @@
 """Builds small video files in memory for tests, so no binary fixtures are needed."""
 
+import fractions
 import io
 import pathlib
 
@@ -19,12 +20,15 @@ def clip(
     text: str | None = None,
     container: str = "mp4",
     codec: str = "h264",
+    pixel_aspect: fractions.Fraction | None = None,
 ) -> bytes:
     """One solid-colour scene per entry in `colors`, optionally with the same `text` drawn over every frame."""
     out = io.BytesIO()
     with av.open(out, "w", format=container) as output:
         stream = output.add_stream(codec, rate=fps)
         stream.width, stream.height, stream.pix_fmt = *size, "yuv420p"
+        if pixel_aspect is not None:
+            stream.codec_context.sample_aspect_ratio = pixel_aspect
         for color in colors:
             picture = PIL.Image.new("RGB", size, color)
             if text:

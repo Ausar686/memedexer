@@ -13,10 +13,22 @@ from memedexer.pipeline.sandbox import FRAME_POSITIONS
 # FFmpeg demuxers (by any of their names) for the containers people send videos and GIFs in. FFmpeg can parse hundreds
 # more, including playlists that reference other files; each one is attack surface no meme needs.
 DEMUXERS = ("mov", "matroska", "avi", "mpegts", "mpeg", "flv", "asf", "gif", "h264", "hevc")
+# FFmpeg decoders (as PyAV names them) for the video codecs those containers carry, old phone and web formats included.
+DECODERS = (
+    "h264", "hevc", "vp8", "vp9", "libvpx", "libvpx-vp9", "av1", "libdav1d", "mpeg4", "mpeg1video", "mpeg2video",
+    "h263", "flv", "msmpeg4", "msmpeg4v1", "msmpeg4v2", "wmv1", "wmv2", "wmv3", "vc1", "mjpeg", "gif",
+)
+# Anamorphic video stretches pixels by a small ratio (e.g. 4:3 or 32:27); anything wilder is a crafted file.
+MAX_PIXEL_ASPECT = 4.0
 # Mean per-channel difference (0-255) between 16×16 colour thumbnails below which two frames show the same picture,
 # e.g. a still image with music. Colour, since different hues can share a grayscale level.
 DUPLICATE_THRESHOLD = 6.0
 _FINGERPRINT_SIZE = (16, 16)
+_SEEK_TOLERANCE_SECONDS = 0.001
+
+
+class InexactSeek(Exception):
+    """A seek landed past its target, or somewhere unknown, so the frame at the target can't be found by seeking."""
 
 
 def sample_frames(data: bytes, duration_hint: float | None = None) -> list[PIL.Image.Image]:
@@ -29,20 +41,20 @@ def sample_frames(data: bytes, duration_hint: float | None = None) -> list[PIL.I
 
 def _sample(data: bytes, duration_hint: float | None) -> list[PIL.Image.Image]:
     with _open(data) as container:
-        if not container.streams.video:
-            raise ValueError("no video stream")
-        stream = container.streams.video[0]
+        stream = _video_stream(container)
         duration = _duration(container, stream) or duration_hint
-        targets = [duration * position for position in FRAME_POSITIONS] if duration else [0.0]
+        # Positions count from the stream's first timestamp, which isn't always 0 (MPEG-TS, edited MP4s).
+        offsets = [duration * position for position in FRAME_POSITIONS] if duration else [0.0]
+        start = _start(container, stream)
         try:
-            pictures = [_seek_picture(container, stream, target) for target in targets]
-        except av.FFmpegError:
-            pictures = None
-    if pictures is None:
-        # Some inputs, like raw streams, can't seek, and a failed seek leaves nothing to decode: reopen the input
-        # and take the frames in one forward pass instead.
-        pictures = _scan(data, targets)
+            pictures = [_seek_picture(container, stream, start + offset) for offset in offsets]
+        except (av.FFmpegError, InexactSeek):
+            pictures = []
     pictures = [picture for picture in pictures if picture is not None]
+    if not pictures:
+        # Some inputs, like raw streams, can't seek, others seek imprecisely, and a seek can leave nothing to decode:
+        # reopen the input and take the frames in one forward pass instead.
+        pictures = _scan(data, offsets)
     if not pictures:
         raise ValueError("no decodable frames")
     return distinct(pictures)
@@ -65,11 +77,37 @@ def _difference(a: PIL.Image.Image, b: PIL.Image.Image) -> float:
 
 
 def _open(data: bytes) -> av.container.InputContainer:
+    # The codec allowlist also binds the decoding FFmpeg does while probing the streams.
+    options = {"format_whitelist": ",".join(DEMUXERS), "codec_whitelist": ",".join(DECODERS)}
     try:
-        return av.open(io.BytesIO(data), options={"format_whitelist": ",".join(DEMUXERS)})
+        return av.open(io.BytesIO(data), options=options)
     except av.ArgumentError as exc:
         # FFmpeg reports a recognised but non-allowlisted container as an invalid argument.
         raise ValueError("unsupported container format") from exc
+
+
+def _video_stream(container: av.container.InputContainer) -> av.VideoStream:
+    if not container.streams.video:
+        raise ValueError("no video stream")
+    stream = container.streams.video[0]
+    # PyAV opens its own decoder, which the format's codec allowlist doesn't cover.
+    if stream.codec_context.name not in DECODERS:
+        raise ValueError(f"unsupported video codec {stream.codec_context.name}")
+    return stream
+
+
+def _start(container: av.container.InputContainer, stream: av.VideoStream) -> float:
+    if stream.start_time is not None:
+        return float(stream.start_time * stream.time_base)
+    if container.start_time is not None:
+        return container.start_time / av.time_base
+    return 0.0
+
+
+def _pixel_aspect(stream: av.VideoStream) -> float:
+    """Width of a pixel relative to its height; anamorphic video stores wider or narrower pixels than it shows."""
+    ratio = stream.sample_aspect_ratio or stream.codec_context.sample_aspect_ratio
+    return min(max(float(ratio), 1 / MAX_PIXEL_ASPECT), MAX_PIXEL_ASPECT) if ratio else 1.0
 
 
 def _duration(container: av.container.InputContainer, stream: av.VideoStream) -> float | None:
@@ -86,36 +124,42 @@ def _seek_picture(
     """The first frame shown at or after `target` seconds, or the last frame when the video ends earlier."""
     container.seek(int(target / stream.time_base), stream=stream)
     frame = None
-    for frame in container.decode(stream):
-        if frame.time is None or frame.time >= target:
+    for index, frame in enumerate(container.decode(stream)):
+        # A backward seek lands on a keyframe at or before the target; MPEG streams land wherever, often later. Without
+        # timestamps there's no telling where it landed.
+        if frame.time is None or (index == 0 and frame.time > target + _SEEK_TOLERANCE_SECONDS):
+            raise InexactSeek
+        if frame.time >= target:
             break
-    return None if frame is None else _upright(frame)
+    return None if frame is None else _upright(frame, _pixel_aspect(stream))
 
 
-def _scan(data: bytes, targets: list[float]) -> list[PIL.Image.Image]:
-    """`_seek_picture` for every target in one forward pass; frame times come from the frame rate if unstamped."""
+def _scan(data: bytes, offsets: list[float]) -> list[PIL.Image.Image]:
+    """`_seek_picture` for every offset in one forward pass; frame times come from the frame rate if unstamped."""
     pictures: list[PIL.Image.Image] = []
-    pending = list(targets)
+    pending = list(offsets)
     last = None
     with _open(data) as container:
-        stream = container.streams.video[0]
+        stream = _video_stream(container)
+        start, aspect = _start(container, stream), _pixel_aspect(stream)
         rate = stream.guessed_rate or stream.average_rate
         for index, frame in enumerate(container.decode(stream)):
             last = frame
-            time = frame.time if frame.time is not None else (float(index / rate) if rate else None)
+            time = frame.time - start if frame.time is not None else (float(index / rate) if rate else None)
             while pending and (time is None or time >= pending[0]):
-                pictures.append(_upright(frame))
+                pictures.append(_upright(frame, aspect))
                 pending.pop(0)
             if not pending:
                 break
         if pending and last is not None:
-            pictures.append(_upright(last))
+            pictures.append(_upright(last, aspect))
     return pictures
 
 
-def _upright(frame: av.VideoFrame) -> PIL.Image.Image:
+def _upright(frame: av.VideoFrame, pixel_aspect: float) -> PIL.Image.Image:
+    width = frame.width * pixel_aspect
     # Scale while converting so a huge frame never exists as a full-size RGB picture.
-    scale = min(1.0, MAX_SIDE / max(frame.width, frame.height))
-    picture = frame.to_image(width=max(1, round(frame.width * scale)), height=max(1, round(frame.height * scale)))
+    scale = min(1.0, MAX_SIDE / max(width, frame.height))
+    picture = frame.to_image(width=max(1, round(width * scale)), height=max(1, round(frame.height * scale)))
     # Phones store portrait video sideways plus a display rotation, counter-clockwise in degrees.
     return picture.rotate(frame.rotation, expand=True) if frame.rotation else picture
