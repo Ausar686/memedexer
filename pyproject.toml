@@ -33,11 +33,13 @@ dev = [
     "pytest==9.1.1",
     "pytest-asyncio==1.4.0",
     "ruff==0.16.9",
-    "semgrep==1.178.0",
+    "semgrep==1.182.0",
 ]
 
 [tool.uv]
 default-groups = ["dev"]
+# semgrep pins mcp==1.29.0, which has advisories fixed in 1.30.0; drop this once semgrep lifts its pin.
+override-dependencies = ["mcp==1.30.0"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
