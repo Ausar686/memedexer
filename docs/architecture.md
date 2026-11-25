@@ -108,7 +108,8 @@ update (photo / video / GIF / image or video document) in an approved chat
   the owner by DM (identical alerts at most hourly). Replies interrupted by a
   restart are retried if they finished within the last 24 h.
 - **Secrets:** credentials are masked in logs, in errors stored on jobs and
-  in owner DMs (file URLs embed the bot token). The bot process is
+  in owner DMs (file URLs embed the bot token). Invalid settings are
+  reported by field, without the values. The bot process is
   non-dumpable, so other processes of its user, like the video decoder, can't
   read its environment or memory.
 - **Storage:** SQLite (WAL) in a Docker volume via SQLAlchemy async; images are
