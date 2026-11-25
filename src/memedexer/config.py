@@ -18,7 +18,9 @@ class Provider(enum.StrEnum):
 class DatabaseSettings(BaseSettings):
     """The subset migrations need, so `alembic` runs without bot credentials."""
 
-    model_config = SettingsConfigDict(env_file=".env", env_ignore_empty=True, extra="ignore")
+    # Validation errors print the whole input otherwise, every credential included, and they surface at startup,
+    # before log redaction is installed.
+    model_config = SettingsConfigDict(env_file=".env", env_ignore_empty=True, extra="ignore", hide_input_in_errors=True)
 
     # A server URL can embed a password; SecretStr keeps it out of reprs and logs like the other credentials.
     database_url: pydantic.SecretStr = pydantic.SecretStr(DEFAULT_DATABASE_URL)
