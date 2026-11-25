@@ -1,0 +1,51 @@
+# Weekly version updates. Security updates are enabled in the repository settings and ignore the cooldown.
+version: 2
+updates:
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    # Let a release sit for a week before proposing it, so a compromised or broken release is likely yanked first.
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: build
+      include: scope
+    # Minor and patch bumps arrive as one PR per group; major bumps get a PR each.
+    groups:
+      runtime:
+        dependency-type: production
+        update-types: [minor, patch]
+      dev:
+        dependency-type: development
+        update-types: [minor, patch]
+
+  - package-ecosystem: docker
+    directory: /.docker
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: build
+      include: scope
+    ignore:
+      # The Python version follows `requires-python` in pyproject.toml; move it there first.
+      - dependency-name: python
+        update-types: [version-update:semver-major, version-update:semver-minor]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: ci
+      include: scope
+    groups:
+      actions:
+        patterns: ["*"]
