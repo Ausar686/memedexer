@@ -1,4 +1,4 @@
-FROM ghcr.io/astral-sh/uv:0.12.18 AS uv
+FROM ghcr.io/astral-sh/uv:0.13.10 AS uv
 
 FROM python:3.13.18-alpine3.24 AS builder
 COPY --from=uv /uv /bin/uv
