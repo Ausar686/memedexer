@@ -6,15 +6,15 @@ readme = "README.md"
 license = "MIT"
 requires-python = ">=3.13,<3.14"
 dependencies = [
-    "aiogram==3.31.0",
+    "aiogram==3.32.0",
     "aiosqlite==0.22.1",
-    "alembic==1.20.0",
+    "alembic==1.20.1",
     "anthropic==1.8.0",
     "av==19.0.2",
-    "openai==3.19.2",
+    "openai==3.54.0",
     "pillow==13.0.0",
-    "pydantic-settings==2.15.0",
-    "sqlalchemy[asyncio]==2.1.1",
+    "pydantic-settings==2.16.3",
+    "sqlalchemy[asyncio]==2.1.9",
 ]
 
 [build-system]
