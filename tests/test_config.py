@@ -90,16 +90,12 @@ def test_database_url_is_masked(env: pytest.MonkeyPatch) -> None:
         ("DEFAULT_PROVIDER", "openai", "has no API key"),
     ],
 )
-def test_validation_errors_hide_credentials(
-    env: pytest.MonkeyPatch, name: str, value: str | None, error: str
-) -> None:
-    env.setenv("ANTHROPIC_API_KEY", "sk-ant-secret-key")
-    env.setenv("DATABASE_URL", "postgresql+asyncpg://bot:hunter2@db:5432/memes")
+def test_validation_errors_hide_values(env: pytest.MonkeyPatch, name: str, value: str | None, error: str) -> None:
+    # The input shown would be the field's value or every setting at once, credentials included.
     if value is None:
         env.delenv(name)
     else:
         env.setenv(name, value)
     with pytest.raises(pydantic.ValidationError, match=error) as raised:
         load()
-    assert "secret-key" not in str(raised.value)
-    assert "hunter2" not in str(raised.value)
+    assert "input_value" not in str(raised.value)
