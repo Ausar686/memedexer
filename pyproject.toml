@@ -9,7 +9,7 @@ dependencies = [
     "aiogram==3.32.0",
     "aiosqlite==0.22.1",
     "alembic==1.20.1",
-    "anthropic==1.8.0",
+    "anthropic==2.10.0",
     "av==19.0.2",
     "openai==3.54.0",
     "pillow==13.0.0",
