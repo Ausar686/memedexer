@@ -1,6 +1,6 @@
 FROM ghcr.io/astral-sh/uv:0.12.18 AS uv
 
-FROM python:3.13.15-alpine3.24 AS builder
+FROM python:3.13.18-alpine3.24 AS builder
 COPY --from=uv /uv /bin/uv
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
@@ -17,7 +17,7 @@ COPY src ./src
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-editable
 
-FROM python:3.13.15-alpine3.24
+FROM python:3.13.18-alpine3.24
 # Apply Alpine security fixes newer than the base tag, and drop the base image's pip (with its vendored
 # urllib3/msgpack): the app runs from its own venv, so pip is only unused attack surface.
 RUN apk upgrade --no-cache \
